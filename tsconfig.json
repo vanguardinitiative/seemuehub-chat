@@ -1,0 +1,71 @@
+{
+  "compilerOptions": {
+    /* Language and Environment */
+    "target": "ES2022",                                  /* Set the JavaScript language version for emitted JavaScript */
+    "lib": ["ES2022"],                                   /* Specify a set of bundled library declaration files */
+    "module": "commonjs",                                /* Specify what module code is generated */
+    "moduleResolution": "node",                          /* Specify how TypeScript looks up a file from a given module name */
+
+    /* Emit */
+    "outDir": "./dist",                                  /* Specify an output folder for all emitted files */
+    "rootDir": "./src",                                  /* Specify the root folder within your source files */
+    "removeComments": true,                              /* Disable emitting comments */
+    "declaration": true,                                 /* Generate .d.ts files from TypeScript and JavaScript files */
+    "declarationMap": true,                              /* Create sourcemaps for d.ts files */
+    "sourceMap": true,                                   /* Create source map files for emitted JavaScript files */
+
+    /* Interop Constraints */
+    "esModuleInterop": true,                             /* Emit additional JavaScript to ease support for importing CommonJS modules */
+    "allowSyntheticDefaultImports": true,                /* Allow 'import x from y' when a module doesn't have a default export */
+    "forceConsistentCasingInFileNames": true,            /* Ensure that casing is correct in imports */
+
+    /* Type Checking */
+    "strict": true,                                      /* Enable all strict type-checking options */
+    "noImplicitAny": true,                               /* Enable error reporting for expressions and declarations with an implied 'any' type */
+    "strictNullChecks": true,                            /* When type checking, take into account 'null' and 'undefined' */
+    "strictFunctionTypes": true,                         /* When assigning functions, check to ensure parameters and the return values are subtype-compatible */
+    "strictBindCallApply": true,                         /* Check that the arguments for 'bind', 'call', and 'apply' methods match the original function */
+    "strictPropertyInitialization": true,                /* Check for class properties that are declared but not set in the constructor */
+    "noImplicitReturns": true,                           /* Enable error reporting for codepaths that do not explicitly return in a function */
+    "noFallthroughCasesInSwitch": true,                  /* Enable error reporting for fallthrough cases in switch statements */
+    "noUncheckedIndexedAccess": false,                   /* Add 'undefined' to a type when accessed using an index */
+    "noImplicitOverride": true,                          /* Ensure overriding members in derived classes are marked with an override modifier */
+    "exactOptionalPropertyTypes": false,                 /* Interpret optional property types as written, rather than adding 'undefined' */
+
+    /* Completeness */
+    "skipLibCheck": true,                                /* Skip type checking all .d.ts files */
+    "skipDefaultLibCheck": true,                         /* Skip type checking .d.ts files that are included with TypeScript */
+
+    /* Advanced Options */
+    "resolveJsonModule": true,                           /* Enable importing .json files */
+    "experimentalDecorators": true,                      /* Enable experimental support for decorators */
+    "emitDecoratorMetadata": true,                       /* Emit design-type metadata for decorated declarations */
+
+    /* Path Mapping */
+    "baseUrl": "./src",                                  /* Specify the base directory to resolve non-relative module names */
+    "paths": {
+      "@/*": ["./*"],
+      "@/config/*": ["./config/*"],
+      "@/controllers/*": ["./controllers/*"],
+      "@/middleware/*": ["./middleware/*"],
+      "@/models/*": ["./models/*"],
+      "@/routes/*": ["./routes/*"],
+      "@/services/*": ["./services/*"],
+      "@/socket/*": ["./socket/*"],
+      "@/types/*": ["./types/*"],
+      "@/utils/*": ["./utils/*"],
+    }
+  },
+  "include": [
+    "src/**/*",
+    "src/**/*.json"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "build",
+    "coverage",
+    "**/*.test.ts",
+    "**/*.spec.ts"
+  ],
+}

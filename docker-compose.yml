@@ -1,0 +1,31 @@
+services:
+  move-chat:
+    image: nodejs
+    container_name: move-chat
+    restart: always
+    build: .
+    ports:
+      - "8181:8181"
+    volumes:
+      - .:/usr/src/app
+      - /usr/src/app/node_modules
+    networks:
+      - move-chat-network
+  # redis:
+  #   image: "redis:latest"
+  #   container_name: redis-chat
+  #   hostname: redis-chat
+  #   command: ["redis-server", "--include", "/usr/local/etc/redis/redis.conf"]
+  #   ports:
+  #     - "6382:6382" # Map container port 6379 to host port 6380
+  #   volumes:
+  #     - "./redis/data:/var/lib/redis"
+  #     - "./redis/redis.conf:/usr/local/etc/redis/redis.conf"
+  #   networks:
+  #     - move-chat-network
+networks:
+  move-chat-network:
+    driver: bridge
+    name: move-chat-network
+volumes:
+  node_modules:
