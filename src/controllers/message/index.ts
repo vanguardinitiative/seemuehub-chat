@@ -84,7 +84,7 @@ const sendPrivateMessage = async (socket: Socket, io: Server, data: MessageData)
     //   .filter(Boolean);
     // await messageStatusModel.insertMany(messageStatusData, { session });/
 
-    console.log("conversationData", conversationData);
+    // console.log("conversationData", conversationData);
     pub.publish(
       "SEND_MESSAGE",
       JSON.stringify({

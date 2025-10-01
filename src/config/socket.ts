@@ -19,6 +19,11 @@ export const setupSocketService = (server: any) => {
       methods: ["GET", "POST"],
     },
   });
+
+  // Register a global installer to be invoked when Redis is ready
+  (global as any).__installSubscriptions = () => subscribeToClient(io);
+
+  // Try to subscribe immediately (in case Redis is already connected)
   subscribeToClient(io);
 
   io.on("connection", (socket) => {

@@ -40,6 +40,9 @@ pub.on("ready", () => {
 });
 sub.on("ready", () => {
     console.log("Redis Subscriber ready");
+    if (typeof global.__installSubscriptions === "function") {
+        global.__installSubscriptions();
+    }
 });
 const connectRedis = async (retries = 3) => {
     try {

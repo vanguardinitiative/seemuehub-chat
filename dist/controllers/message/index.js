@@ -48,7 +48,6 @@ const sendPrivateMessage = async (socket, io, data) => {
                 deliveredAllAt: new Date(),
             },
         }, { new: true, session });
-        console.log("conversationData", conversationData);
         redis_1.pub.publish("SEND_MESSAGE", JSON.stringify({
             conversation: conversationData,
             messageData,

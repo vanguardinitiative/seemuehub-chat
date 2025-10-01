@@ -11,6 +11,7 @@ const setupSocketService = (server) => {
             methods: ["GET", "POST"],
         },
     });
+    global.__installSubscriptions = () => (0, redis_1.subscribeToClient)(io);
     (0, redis_1.subscribeToClient)(io);
     io.on("connection", (socket) => {
         console.log("Frontend client connected: ", socket.id);

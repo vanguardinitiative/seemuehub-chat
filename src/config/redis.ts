@@ -53,6 +53,10 @@ pub.on("ready", () => {
 
 sub.on("ready", () => {
   console.log("Redis Subscriber ready");
+  // Defer: after subscriber is ready, (re-)install subscriptions
+  if (typeof (global as any).__installSubscriptions === "function") {
+    (global as any).__installSubscriptions();
+  }
 });
 
 // Graceful connection with retry logic
