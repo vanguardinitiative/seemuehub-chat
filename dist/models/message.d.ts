@@ -20,7 +20,13 @@ declare enum MessageType {
     LOCATION = "LOCATION",
     VOICE_CALL = "VOICE_CALL",
     VIDEO_CALL = "VIDEO_CALL",
-    SYSTEM = "SYSTEM"
+    SYSTEM = "SYSTEM",
+    ORDER_UPDATE = "ORDER_UPDATE",
+    ORDER_STATUS_CHANGE = "ORDER_STATUS_CHANGE",
+    ORDER_DELIVERY = "ORDER_DELIVERY",
+    ORDER_REVISION = "ORDER_REVISION",
+    ORDER_PAYMENT = "ORDER_PAYMENT",
+    ORDER_DISPUTE = "ORDER_DISPUTE"
 }
 declare enum CallStatus {
     RINGING = "RINGING",
@@ -54,6 +60,15 @@ export interface IMessage extends Document {
     replyTo?: mongoose.Types.ObjectId;
     deliveredAllAt?: Date;
     readAllAt?: Date;
+    orderId?: mongoose.Types.ObjectId;
+    orderStatus?: string;
+    orderAction?: {
+        type: string;
+        fromStatus?: string;
+        toStatus?: string;
+        metadata?: any;
+    };
+    isOrderMessage?: boolean;
 }
 export { MessageType, CallStatus };
 export declare const messageModel: mongoose.Model<IMessage, {}, {}, {}, mongoose.Document<unknown, {}, IMessage, {}> & IMessage & Required<{

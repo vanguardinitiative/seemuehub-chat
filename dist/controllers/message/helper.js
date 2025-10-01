@@ -55,7 +55,7 @@ const messageNotification = async (conversationData, messageData) => {
         let senderProfile = conversationData?.conversationImage;
         if (isPrivateChat) {
             const messageDetail = await user_1.userModel.findById(senderId);
-            senderName = messageDetail?.fullName;
+            senderName = messageDetail?.userName;
             senderProfile = messageDetail?.profileImage;
         }
         else {

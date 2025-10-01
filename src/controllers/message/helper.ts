@@ -82,7 +82,7 @@ export const messageNotification = async (conversationData: IConversation, messa
     let senderProfile = conversationData?.conversationImage;
     if (isPrivateChat) {
       const messageDetail = await userModel.findById(senderId);
-      senderName = messageDetail?.fullName;
+      senderName = messageDetail?.userName;
       senderProfile = messageDetail?.profileImage;
     } else {
       const messageDetail = await staffModel.findById(senderId);

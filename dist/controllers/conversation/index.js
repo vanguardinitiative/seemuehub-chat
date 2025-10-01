@@ -42,21 +42,24 @@ const user_1 = require("../../models/user");
 const mongoose_1 = __importStar(require("mongoose"));
 const createPrivateConversation = async (req, res) => {
     try {
-        const { senderId, receiverId, orderId } = req.body;
+        const { senderId, receiverId, orderId, orderStatus, orderTitle, orderBudget, orderDeadline, orderPriority } = req.body;
         if (!senderId || !receiverId) {
             res.status(400).json(config_1.messages.BAD_REQUEST);
             return;
         }
         if (senderId === receiverId) {
             res.status(400).json(config_1.messages.SELF_CONVERSATION_NOT_ALLOWED);
+            return;
         }
         const existingConversation = await conversation_1.conversationModel
             .findOne({
             conversationType: "PRIVATE",
             orderId: orderId,
+            participants: {
+                $all: [{ $elemMatch: { user: senderId } }, { $elemMatch: { user: receiverId } }],
+            },
         })
             .populate("participants.user", "fullName phone email role profileImage");
-        console.log("step 2");
         if (existingConversation) {
             res.status(200).json({
                 code: config_1.messages.SUCCESSFULLY.code,
@@ -65,41 +68,56 @@ const createPrivateConversation = async (req, res) => {
             });
             return;
         }
-        let senderType = conversation_1.UserType.STAFF;
-        let receiverType = conversation_1.UserType.STAFF;
-        const sender = await staff_1.staffModel.findById(senderId);
-        if (!sender) {
-            senderType = conversation_1.UserType.USER;
+        const sender = await user_1.userModel.findById(senderId);
+        const receiver = await user_1.userModel.findById(receiverId);
+        if (!sender || !receiver) {
+            res.status(400).json({
+                code: "CHAT-400",
+                message: "Both participants must be regular users for private conversations",
+            });
+            return;
         }
-        const receiver = await staff_1.staffModel.findById(receiverId);
-        if (!receiver) {
-            receiverType = conversation_1.UserType.USER;
-        }
-        console.log("senderType======>", senderType);
-        console.log("receiverType======>", receiverType);
+        const senderType = conversation_1.UserType.USER;
+        const receiverType = conversation_1.UserType.USER;
         const participants = [
             { user: senderId, joinDate: Date.now(), userType: senderType },
             { user: receiverId, joinDate: Date.now(), userType: receiverType },
         ];
-        const newConversation = await conversation_1.conversationModel.create({
+        const conversationData = {
             participants,
             conversationType: "PRIVATE",
             orderId: orderId,
-        });
+            latestMessageData: {
+                isDeleted: false,
+            },
+        };
+        if (orderStatus)
+            conversationData.orderStatus = orderStatus;
+        if (orderTitle)
+            conversationData.orderTitle = orderTitle;
+        if (orderBudget)
+            conversationData.orderBudget = orderBudget;
+        if (orderDeadline)
+            conversationData.orderDeadline = new Date(orderDeadline);
+        if (orderPriority)
+            conversationData.orderPriority = orderPriority;
+        if (orderId)
+            conversationData.isOrderActive = true;
+        const newConversation = await conversation_1.conversationModel.create(conversationData);
         const fullConversation = await conversation_1.conversationModel
             .findOne({
             _id: newConversation._id,
         })
             .populate("participants.user", "fullName phone email role profileImage isOnline");
-        res.status(200).json({
-            code: config_1.messages.SUCCESSFULLY.code,
-            message: config_1.messages.SUCCESSFULLY.message,
+        res.status(201).json({
+            code: config_1.messages.CREATE_SUCCESSFUL.code,
+            message: config_1.messages.CREATE_SUCCESSFUL.message,
             data: fullConversation,
         });
         return;
     }
     catch (error) {
-        console.log(error);
+        console.log("Error creating private conversation:", error);
         res.status(500).json(config_1.messages.INTERNAL_SERVER_ERROR);
         return;
     }
@@ -125,7 +143,7 @@ const createGroupConversation = async (req, res) => {
             });
             return;
         }
-        let senderType = conversation_1.UserType.STAFF;
+        let senderType = conversation_1.UserType.ADMIN;
         const sender = await staff_1.staffModel.findById(senderId);
         if (!sender) {
             senderType = conversation_1.UserType.USER;
@@ -141,22 +159,25 @@ const createGroupConversation = async (req, res) => {
             ...allStaff.map((staff) => ({
                 user: staff._id,
                 joinDate: Date.now(),
-                userType: conversation_1.UserType.STAFF,
+                userType: conversation_1.UserType.ADMIN,
             })),
         ];
         const newConversation = await conversation_1.conversationModel.create({
             participants,
             conversationType: "GROUP",
             conversationName: "SUPPORT_GROUP",
+            latestMessageData: {
+                isDeleted: false,
+            },
         });
         const fullConversation = await conversation_1.conversationModel
             .findOne({
             _id: newConversation._id,
         })
             .populate("participants.user", "fullName phone email role profileImage isOnline");
-        res.status(200).json({
-            code: config_1.messages.SUCCESSFULLY.code,
-            message: config_1.messages.SUCCESSFULLY.message,
+        res.status(201).json({
+            code: config_1.messages.CREATE_SUCCESSFUL.code,
+            message: config_1.messages.CREATE_SUCCESSFUL.message,
             data: fullConversation,
         });
         return;

@@ -93,9 +93,9 @@ const sendPrivateMessage = async (socket: Socket, io: Server, data: MessageData)
       })
     );
 
-    if (conversationData) {
-      messageNotification(conversationData, messageData);
-    }
+    // if (conversationData) {
+    //   messageNotification(conversationData, messageData);
+    // }
 
     // if (data.messageType !== MessageType.IMAGE) {
     //   pub.publish(

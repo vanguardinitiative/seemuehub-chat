@@ -53,9 +53,6 @@ const sendPrivateMessage = async (socket, io, data) => {
             conversation: conversationData,
             messageData,
         }));
-        if (conversationData) {
-            (0, helper_1.messageNotification)(conversationData, messageData);
-        }
         await session.commitTransaction();
     }
     catch (error) {

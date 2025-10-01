@@ -33,58 +33,97 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.userModel = void 0;
+exports.userModel = exports.UserRole = exports.Gender = void 0;
 const mongoose_1 = __importStar(require("mongoose"));
+var Gender;
+(function (Gender) {
+    Gender["MALE"] = "MALE";
+    Gender["FEMALE"] = "FEMALE";
+    Gender["OTHER"] = "OTHER";
+})(Gender || (exports.Gender = Gender = {}));
 var UserRole;
 (function (UserRole) {
-    UserRole["CUSTOMER"] = "CUSTOMER";
-    UserRole["DRIVER"] = "DRIVER";
-})(UserRole || (UserRole = {}));
+    UserRole["USER"] = "USER";
+    UserRole["ADMIN"] = "ADMIN";
+})(UserRole || (exports.UserRole = UserRole = {}));
 const UserSchema = new mongoose_1.Schema({
-    firstName: {
-        type: String,
-        required: false,
-    },
-    lastName: {
-        type: String,
-        required: false,
-        default: null,
-    },
-    fullName: {
-        type: String,
-        required: false,
-        default: null,
-    },
-    phone: {
-        type: String,
-        default: null,
-        required: false,
-    },
     email: {
+        type: String,
+        required: [true, "Email is required"],
+        lowercase: true,
+        trim: true,
+        match: [/^\w+([.-]?\w+)*@\w+([.-]?\w+)*(\.\w{2,3})+$/, "Please enter a valid email"],
+        index: true,
+    },
+    userName: {
+        type: String,
+        required: true,
+    },
+    gender: {
+        type: String,
+        enum: Object.values(Gender),
+        default: Gender.OTHER,
+    },
+    displayName: {
+        type: String,
+        default: null,
+    },
+    password: {
         type: String,
         required: false,
     },
     role: {
         type: String,
-        enum: [UserRole.CUSTOMER, UserRole.DRIVER],
-        default: UserRole.CUSTOMER,
+        enum: Object.values(UserRole),
+        default: UserRole.USER,
         required: true,
     },
     profileImage: {
         type: String,
-        required: false,
         default: null,
     },
-    licensePlate: {
+    phone: {
         type: String,
         default: null,
+    },
+    dateOfBirth: {
+        type: Date,
+        default: null,
+    },
+    lastLoginAt: {
+        type: Date,
+        default: null,
+    },
+    isFreelancer: {
+        type: Boolean,
+        default: false,
+    },
+    freelancerInfo: {
+        type: mongoose_1.Schema.Types.Mixed,
+        default: null,
+    },
+    address: {
+        village: { type: String, default: null },
+        district: { type: String, default: null },
+        province: { type: String, default: null },
     },
     deviceToken: {
         type: String,
         default: null,
     },
-    isOnline: { type: Boolean, default: false },
-    socketId: { type: String, default: null },
+    isOnline: {
+        type: Boolean,
+        default: false,
+    },
+    socketId: {
+        type: String,
+        default: null,
+    },
+}, {
+    timestamps: true,
 });
+UserSchema.index({ email: 1 });
+UserSchema.index({ isOnline: 1 });
+UserSchema.index({ socketId: 1 });
 exports.userModel = mongoose_1.default.model("User", UserSchema);
 //# sourceMappingURL=user.js.map

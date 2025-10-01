@@ -35,6 +35,19 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.messageModel = exports.CallStatus = exports.MessageType = void 0;
 const mongoose_1 = __importStar(require("mongoose"));
+var OrderStatus;
+(function (OrderStatus) {
+    OrderStatus["PENDING"] = "PENDING";
+    OrderStatus["ACCEPTED"] = "ACCEPTED";
+    OrderStatus["IN_PROGRESS"] = "IN_PROGRESS";
+    OrderStatus["IN_REVIEW"] = "IN_REVIEW";
+    OrderStatus["REVISION_REQUESTED"] = "REVISION_REQUESTED";
+    OrderStatus["DELIVERED"] = "DELIVERED";
+    OrderStatus["COMPLETED"] = "COMPLETED";
+    OrderStatus["CANCELLED"] = "CANCELLED";
+    OrderStatus["REFUNDED"] = "REFUNDED";
+    OrderStatus["DISPUTED"] = "DISPUTED";
+})(OrderStatus || (OrderStatus = {}));
 var MessageType;
 (function (MessageType) {
     MessageType["TEXT"] = "TEXT";
@@ -48,6 +61,12 @@ var MessageType;
     MessageType["VOICE_CALL"] = "VOICE_CALL";
     MessageType["VIDEO_CALL"] = "VIDEO_CALL";
     MessageType["SYSTEM"] = "SYSTEM";
+    MessageType["ORDER_UPDATE"] = "ORDER_UPDATE";
+    MessageType["ORDER_STATUS_CHANGE"] = "ORDER_STATUS_CHANGE";
+    MessageType["ORDER_DELIVERY"] = "ORDER_DELIVERY";
+    MessageType["ORDER_REVISION"] = "ORDER_REVISION";
+    MessageType["ORDER_PAYMENT"] = "ORDER_PAYMENT";
+    MessageType["ORDER_DISPUTE"] = "ORDER_DISPUTE";
 })(MessageType || (exports.MessageType = MessageType = {}));
 var CallStatus;
 (function (CallStatus) {
@@ -105,6 +124,32 @@ const messageSchema = new mongoose_1.Schema({
     replyTo: { type: mongoose_1.Schema.Types.ObjectId, ref: "Message" },
     deliveredAllAt: Date,
     readAllAt: Date,
+    orderId: {
+        type: mongoose_1.Schema.Types.ObjectId,
+        ref: "Order",
+        index: true,
+    },
+    orderStatus: {
+        type: String,
+        enum: Object.values(OrderStatus),
+    },
+    orderAction: {
+        type: {
+            type: String,
+            enum: ["status_change", "delivery", "revision_request", "payment", "dispute"],
+        },
+        fromStatus: String,
+        toStatus: String,
+        metadata: mongoose_1.Schema.Types.Mixed,
+    },
+    isOrderMessage: {
+        type: Boolean,
+        default: false,
+        index: true,
+    },
 }, { timestamps: true });
+messageSchema.index({ orderId: 1, isOrderMessage: 1 });
+messageSchema.index({ conversation: 1, isOrderMessage: 1 });
+messageSchema.index({ "orderAction.type": 1, sendAt: -1 });
 exports.messageModel = mongoose_1.default.model("Message", messageSchema);
 //# sourceMappingURL=message.js.map

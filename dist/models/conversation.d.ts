@@ -5,8 +5,20 @@ declare enum ConversationType {
     ANONYMOUS = "ANONYMOUS"
 }
 export declare enum UserType {
-    USER = "User",
-    STAFF = "Staff"
+    USER = "USER",
+    ADMIN = "ADMIN"
+}
+export declare enum OrderStatus {
+    PENDING = "PENDING",
+    ACCEPTED = "ACCEPTED",
+    IN_PROGRESS = "IN_PROGRESS",
+    IN_REVIEW = "IN_REVIEW",
+    REVISION_REQUESTED = "REVISION_REQUESTED",
+    DELIVERED = "DELIVERED",
+    COMPLETED = "COMPLETED",
+    CANCELLED = "CANCELLED",
+    REFUNDED = "REFUNDED",
+    DISPUTED = "DISPUTED"
 }
 export interface IParticipant {
     user: mongoose.Types.ObjectId;
@@ -25,13 +37,22 @@ interface ILatestMessageData {
 }
 export interface IConversation extends Document {
     _id: mongoose.Types.ObjectId;
-    orderId?: string;
+    orderId?: mongoose.Types.ObjectId;
     conversationName?: string;
     conversationImage?: string;
     conversationType: ConversationType;
     participants: IParticipant[];
     latestMessageData: ILatestMessageData;
     background?: string;
+    orderStatus?: string;
+    orderTitle?: string;
+    orderBudget?: {
+        amount: number;
+        currency: string;
+    };
+    orderDeadline?: Date;
+    isOrderActive?: boolean;
+    orderPriority?: "LOW" | "MEDIUM" | "HIGH" | "URGENT";
 }
 export { ConversationType };
 export declare const conversationModel: mongoose.Model<IConversation, {}, {}, {}, mongoose.Document<unknown, {}, IConversation, {}> & IConversation & Required<{

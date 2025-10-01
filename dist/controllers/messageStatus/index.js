@@ -36,11 +36,11 @@ const updateReadStatus = async (req, res) => {
             }
             else {
                 userIds = conversation.participants
-                    .filter((participant) => participant.userType === conversation_1.UserType.STAFF)
+                    .filter((participant) => participant.userType === conversation_1.UserType.ADMIN)
                     .map((participant) => participant.user.toString());
             }
         }
-        else if (userData.userType === conversation_1.UserType.STAFF) {
+        else if (userData.userType === conversation_1.UserType.ADMIN) {
             userIds = conversation.participants
                 .filter((participant) => participant.userType === conversation_1.UserType.USER)
                 .map((participant) => participant.user.toString());

@@ -1,25 +1,41 @@
 import mongoose, { Document } from "mongoose";
-declare enum UserRole {
-    CUSTOMER = "CUSTOMER",
-    DRIVER = "DRIVER"
+export declare enum Gender {
+    MALE = "MALE",
+    FEMALE = "FEMALE",
+    OTHER = "OTHER"
+}
+export declare enum UserRole {
+    USER = "USER",
+    ADMIN = "ADMIN"
 }
 export interface IUser extends Document {
-    firstName: string;
-    lastName: string;
-    fullName: string;
-    phone: string;
+    _id: mongoose.Types.ObjectId;
     email: string;
-    licensePlate: string;
+    userName: string;
+    gender?: Gender;
+    displayName?: string;
+    password?: string;
     role: UserRole;
-    profileImage: string;
-    deviceToken: string;
-    isOnline: boolean;
-    socketId: string;
+    isFreelancer?: boolean;
+    lastLoginAt?: Date | null;
+    createdAt: Date;
+    updatedAt: Date;
+    freelancerInfo?: any;
+    profileImage?: string;
+    phone?: string;
+    dateOfBirth?: Date;
+    address?: {
+        village?: string;
+        district?: string;
+        province?: string;
+    };
+    deviceToken?: string;
+    isOnline?: boolean;
+    socketId?: string;
 }
 export declare const userModel: mongoose.Model<IUser, {}, {}, {}, mongoose.Document<unknown, {}, IUser, {}> & IUser & Required<{
-    _id: unknown;
+    _id: mongoose.Types.ObjectId;
 }> & {
     __v: number;
 }, any>;
-export {};
 //# sourceMappingURL=user.d.ts.map

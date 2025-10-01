@@ -33,7 +33,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.conversationModel = exports.ConversationType = exports.UserType = void 0;
+exports.conversationModel = exports.ConversationType = exports.OrderStatus = exports.UserType = void 0;
 const mongoose_1 = __importStar(require("mongoose"));
 var ConversationType;
 (function (ConversationType) {
@@ -43,11 +43,28 @@ var ConversationType;
 })(ConversationType || (exports.ConversationType = ConversationType = {}));
 var UserType;
 (function (UserType) {
-    UserType["USER"] = "User";
-    UserType["STAFF"] = "Staff";
+    UserType["USER"] = "USER";
+    UserType["ADMIN"] = "ADMIN";
 })(UserType || (exports.UserType = UserType = {}));
+var OrderStatus;
+(function (OrderStatus) {
+    OrderStatus["PENDING"] = "PENDING";
+    OrderStatus["ACCEPTED"] = "ACCEPTED";
+    OrderStatus["IN_PROGRESS"] = "IN_PROGRESS";
+    OrderStatus["IN_REVIEW"] = "IN_REVIEW";
+    OrderStatus["REVISION_REQUESTED"] = "REVISION_REQUESTED";
+    OrderStatus["DELIVERED"] = "DELIVERED";
+    OrderStatus["COMPLETED"] = "COMPLETED";
+    OrderStatus["CANCELLED"] = "CANCELLED";
+    OrderStatus["REFUNDED"] = "REFUNDED";
+    OrderStatus["DISPUTED"] = "DISPUTED";
+})(OrderStatus || (exports.OrderStatus = OrderStatus = {}));
 const conversationSchema = new mongoose_1.Schema({
-    orderId: String,
+    orderId: {
+        type: mongoose_1.Schema.Types.ObjectId,
+        ref: "Order",
+        index: true,
+    },
     conversationName: String,
     conversationImage: String,
     conversationType: {
@@ -60,7 +77,7 @@ const conversationSchema = new mongoose_1.Schema({
         {
             user: {
                 type: mongoose_1.Schema.Types.ObjectId,
-                refPath: "participants.userType",
+                ref: "User",
                 index: true,
             },
             userType: {
@@ -85,8 +102,33 @@ const conversationSchema = new mongoose_1.Schema({
         isDeleted: { type: Boolean, default: false },
     },
     background: String,
+    orderStatus: {
+        type: String,
+        enum: Object.values(OrderStatus),
+        index: true,
+    },
+    orderTitle: String,
+    orderBudget: {
+        amount: { type: Number, min: 0 },
+        currency: { type: String, default: "THB" },
+    },
+    orderDeadline: Date,
+    isOrderActive: {
+        type: Boolean,
+        default: true,
+        index: true,
+    },
+    orderPriority: {
+        type: String,
+        enum: ["LOW", "MEDIUM", "HIGH", "URGENT"],
+        default: "MEDIUM",
+    },
 }, { timestamps: true });
-conversationSchema.index({ "participants.user": 1, conversationType: 1, platform: 1 });
+conversationSchema.index({ "participants.user": 1, conversationType: 1 });
 conversationSchema.index({ updatedAt: -1 });
+conversationSchema.index({ orderId: 1, isOrderActive: 1 });
+conversationSchema.index({ orderStatus: 1, isOrderActive: 1 });
+conversationSchema.index({ orderPriority: 1, orderDeadline: 1 });
+conversationSchema.index({ "participants.user": 1, orderId: 1 });
 exports.conversationModel = mongoose_1.default.model("Conversation", conversationSchema);
 //# sourceMappingURL=conversation.js.map
