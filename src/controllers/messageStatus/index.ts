@@ -15,7 +15,7 @@ const updateReadStatus = async (req: Request, res: Response): Promise<void> => {
       res.status(400).json(messages.BAD_REQUEST);
       return;
     }
-    const receiverId = (req as any).user.id;
+    const receiverId = (req as any).user.userId;
     //step1: ເອົາຂໍ້ມູນຂອງ conversation
     const conversation = await conversationModel.findById(conversationId);
     if (!conversation) {

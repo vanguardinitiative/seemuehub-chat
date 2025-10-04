@@ -242,7 +242,8 @@ interface IConversationData {
 const getAllConversions = async (req: Request, res: Response): Promise<void> => {
   try {
     const { search, skip = "0", limit = "100" } = req.query as QueryParams;
-    const userId = (req as any).user.id;
+    const userId = (req as any).user.userId;
+    console.log("data   ===> ", (req as any).user);
     const skipNumber = parseInt(skip, 10);
     const limitNumber = parseInt(limit, 10);
 
@@ -272,6 +273,8 @@ const getAllConversions = async (req: Request, res: Response): Promise<void> => 
         },
       ];
     }
+
+    console.log("query  ===> ", query);
 
     const conversations = await conversationModel
       .find(query)

@@ -14,7 +14,7 @@ const updateReadStatus = async (req, res) => {
             res.status(400).json(config_1.messages.BAD_REQUEST);
             return;
         }
-        const receiverId = req.user.id;
+        const receiverId = req.user.userId;
         const conversation = await conversation_1.conversationModel.findById(conversationId);
         if (!conversation) {
             res.status(404).json(config_1.messages.NOT_FOUND);

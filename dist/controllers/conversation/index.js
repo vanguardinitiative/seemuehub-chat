@@ -223,7 +223,8 @@ exports.getConversation = getConversation;
 const getAllConversions = async (req, res) => {
     try {
         const { search, skip = "0", limit = "100" } = req.query;
-        const userId = req.user.id;
+        const userId = req.user.userId;
+        console.log("data   ===> ", req.user);
         const skipNumber = parseInt(skip, 10);
         const limitNumber = parseInt(limit, 10);
         const query = {
@@ -247,6 +248,7 @@ const getAllConversions = async (req, res) => {
                 },
             ];
         }
+        console.log("query  ===> ", query);
         const conversations = await conversation_1.conversationModel
             .find(query)
             .populate("participants.user", "fullName phone email role profileImage isOnline")
