@@ -181,6 +181,20 @@ const subscribeToClient = async (io) => {
                 console.error(`Error in USER_OFFLINE handler:`, error instanceof Error ? error.message : "Unknown error");
             }
         });
+        sub.subscribe("CORE_SOCKET", async (message) => {
+            try {
+                const data = JSON.parse(message);
+                console.log("data===>", data);
+                const dataResponse = {
+                    type: "PAYMENT",
+                    response: data,
+                };
+                io.emit("LISTENING", dataResponse);
+            }
+            catch (error) {
+                console.log("error core socket", error);
+            }
+        });
         console.log("Redis subscriptions set up successfully");
     }
     catch (error) {
