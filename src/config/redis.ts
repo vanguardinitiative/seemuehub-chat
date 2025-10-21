@@ -223,6 +223,19 @@ const subscribeToClient = async (io: Server): Promise<void> => {
       }
     });
 
+    sub.subscribe("CORE_SOCKET", async (message: string) => {
+      try {
+        const data: any = JSON.parse(message);
+        console.log("data===>", data);
+        const dataResponse = {
+          type: "PAYMENT",
+          response: data,
+        };
+        io.emit("LISTENING", dataResponse);
+      } catch (error) {
+        console.log("error core socket", error);
+      }
+    });
     console.log("Redis subscriptions set up successfully");
   } catch (error) {
     console.error("Error setting up Redis subscriptions:", error);
