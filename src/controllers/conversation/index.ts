@@ -21,6 +21,8 @@ const createPrivateConversation = async (req: Request, res: Response): Promise<v
       res.status(400).json(messages.SELF_CONVERSATION_NOT_ALLOWED);
       return;
     }
+    // delay 3 second
+    await new Promise((resolve) => setTimeout(resolve, 3000));
 
     // Check for existing conversation with orderId
     const existingConversation = await conversationModel
@@ -33,67 +35,67 @@ const createPrivateConversation = async (req: Request, res: Response): Promise<v
       })
       .populate("participants.user", "fullName phone email role profileImage");
 
-    if (existingConversation) {
-      res.status(200).json({
-        code: messages.SUCCESSFULLY.code,
-        message: messages.SUCCESSFULLY.message,
-        data: existingConversation,
-      });
-      return;
-    }
+    // if (existingConversation) {
+    //   res.status(200).json({
+    //     code: messages.SUCCESSFULLY.code,
+    //     message: messages.SUCCESSFULLY.message,
+    //     data: existingConversation,
+    //   });
+    //   return;
+    // }
 
-    // Private conversations are only for regular users (not staff/admin)
-    // Verify both participants are regular users
-    const sender = await userModel.findById(senderId);
-    const receiver = await userModel.findById(receiverId);
+    // // Private conversations are only for regular users (not staff/admin)
+    // // Verify both participants are regular users
+    // const sender = await userModel.findById(senderId);
+    // const receiver = await userModel.findById(receiverId);
 
-    if (!sender || !receiver) {
-      res.status(400).json({
-        code: "CHAT-400",
-        message: "Both participants must be regular users for private conversations",
-      });
-      return;
-    }
+    // if (!sender || !receiver) {
+    //   res.status(400).json({
+    //     code: "CHAT-400",
+    //     message: "Both participants must be regular users for private conversations",
+    //   });
+    //   return;
+    // }
 
-    // Both participants are regular users
-    const senderType = UserType.USER;
-    const receiverType = UserType.USER;
+    // // Both participants are regular users
+    // const senderType = UserType.USER;
+    // const receiverType = UserType.USER;
 
-    const participants = [
-      { user: senderId, joinDate: Date.now(), userType: senderType },
-      { user: receiverId, joinDate: Date.now(), userType: receiverType },
-    ];
+    // const participants = [
+    //   { user: senderId, joinDate: Date.now(), userType: senderType },
+    //   { user: receiverId, joinDate: Date.now(), userType: receiverType },
+    // ];
 
-    // Create conversation with order integration
-    const conversationData: any = {
-      participants,
-      conversationType: "PRIVATE",
-      orderId: orderId,
-      latestMessageData: {
-        isDeleted: false,
-      },
-    };
+    // // Create conversation with order integration
+    // const conversationData: any = {
+    //   participants,
+    //   conversationType: "PRIVATE",
+    //   orderId: orderId,
+    //   latestMessageData: {
+    //     isDeleted: false,
+    //   },
+    // };
 
-    // Add order-related fields if provided
-    if (orderStatus) conversationData.orderStatus = orderStatus;
-    if (orderTitle) conversationData.orderTitle = orderTitle;
-    if (orderBudget) conversationData.orderBudget = orderBudget;
-    if (orderDeadline) conversationData.orderDeadline = new Date(orderDeadline);
-    if (orderPriority) conversationData.orderPriority = orderPriority;
-    if (orderId) conversationData.isOrderActive = true;
+    // // Add order-related fields if provided
+    // if (orderStatus) conversationData.orderStatus = orderStatus;
+    // if (orderTitle) conversationData.orderTitle = orderTitle;
+    // if (orderBudget) conversationData.orderBudget = orderBudget;
+    // if (orderDeadline) conversationData.orderDeadline = new Date(orderDeadline);
+    // if (orderPriority) conversationData.orderPriority = orderPriority;
+    // if (orderId) conversationData.isOrderActive = true;
 
-    const newConversation = await conversationModel.create(conversationData);
+    // const newConversation = await conversationModel.create(conversationData);
 
-    const fullConversation = await conversationModel
-      .findOne({
-        _id: newConversation._id,
-      })
-      .populate("participants.user", "fullName phone email role profileImage isOnline");
+    // const fullConversation = await conversationModel
+    //   .findOne({
+    //     _id: newConversation._id,
+    //   })
+    //   .populate("participants.user", "fullName phone email role profileImage isOnline");
 
     res.status(201).json({
       code: messages.CREATE_SUCCESSFUL.code,
       message: messages.CREATE_SUCCESSFUL.message,
-      data: fullConversation,
+      data: existingConversation,
     });
     return;
   } catch (error) {

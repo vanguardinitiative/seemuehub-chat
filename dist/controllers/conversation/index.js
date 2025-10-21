@@ -51,6 +51,7 @@ const createPrivateConversation = async (req, res) => {
             res.status(400).json(config_1.messages.SELF_CONVERSATION_NOT_ALLOWED);
             return;
         }
+        await new Promise((resolve) => setTimeout(resolve, 3000));
         const existingConversation = await conversation_1.conversationModel
             .findOne({
             conversationType: "PRIVATE",
@@ -60,59 +61,10 @@ const createPrivateConversation = async (req, res) => {
             },
         })
             .populate("participants.user", "fullName phone email role profileImage");
-        if (existingConversation) {
-            res.status(200).json({
-                code: config_1.messages.SUCCESSFULLY.code,
-                message: config_1.messages.SUCCESSFULLY.message,
-                data: existingConversation,
-            });
-            return;
-        }
-        const sender = await user_1.userModel.findById(senderId);
-        const receiver = await user_1.userModel.findById(receiverId);
-        if (!sender || !receiver) {
-            res.status(400).json({
-                code: "CHAT-400",
-                message: "Both participants must be regular users for private conversations",
-            });
-            return;
-        }
-        const senderType = conversation_1.UserType.USER;
-        const receiverType = conversation_1.UserType.USER;
-        const participants = [
-            { user: senderId, joinDate: Date.now(), userType: senderType },
-            { user: receiverId, joinDate: Date.now(), userType: receiverType },
-        ];
-        const conversationData = {
-            participants,
-            conversationType: "PRIVATE",
-            orderId: orderId,
-            latestMessageData: {
-                isDeleted: false,
-            },
-        };
-        if (orderStatus)
-            conversationData.orderStatus = orderStatus;
-        if (orderTitle)
-            conversationData.orderTitle = orderTitle;
-        if (orderBudget)
-            conversationData.orderBudget = orderBudget;
-        if (orderDeadline)
-            conversationData.orderDeadline = new Date(orderDeadline);
-        if (orderPriority)
-            conversationData.orderPriority = orderPriority;
-        if (orderId)
-            conversationData.isOrderActive = true;
-        const newConversation = await conversation_1.conversationModel.create(conversationData);
-        const fullConversation = await conversation_1.conversationModel
-            .findOne({
-            _id: newConversation._id,
-        })
-            .populate("participants.user", "fullName phone email role profileImage isOnline");
         res.status(201).json({
             code: config_1.messages.CREATE_SUCCESSFUL.code,
             message: config_1.messages.CREATE_SUCCESSFUL.message,
-            data: fullConversation,
+            data: existingConversation,
         });
         return;
     }
