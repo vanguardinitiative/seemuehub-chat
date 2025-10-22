@@ -223,7 +223,7 @@ const subscribeToClient = async (io: Server): Promise<void> => {
       }
     });
 
-    sub.subscribe("CORE_SOCKET", async (message: string) => {
+    sub.subscribe("PAYMENT", async (message: string) => {
       try {
         const data: any = JSON.parse(message);
         console.log("data===>", data);
@@ -231,6 +231,8 @@ const subscribeToClient = async (io: Server): Promise<void> => {
           type: "PAYMENT",
           response: data,
         };
+
+        console.log("dataResponse===>", dataResponse);
         io.emit("LISTENING", dataResponse);
       } catch (error) {
         console.log("error core socket", error);

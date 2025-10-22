@@ -181,7 +181,7 @@ const subscribeToClient = async (io) => {
                 console.error(`Error in USER_OFFLINE handler:`, error instanceof Error ? error.message : "Unknown error");
             }
         });
-        sub.subscribe("CORE_SOCKET", async (message) => {
+        sub.subscribe("PAYMENT", async (message) => {
             try {
                 const data = JSON.parse(message);
                 console.log("data===>", data);
@@ -189,6 +189,7 @@ const subscribeToClient = async (io) => {
                     type: "PAYMENT",
                     response: data,
                 };
+                console.log("dataResponse===>", dataResponse);
                 io.emit("LISTENING", dataResponse);
             }
             catch (error) {
