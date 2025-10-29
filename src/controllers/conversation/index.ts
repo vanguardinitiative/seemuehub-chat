@@ -22,18 +22,20 @@ const createPrivateConversation = async (req: Request, res: Response): Promise<v
       return;
     }
     // delay 3 second
-    await new Promise((resolve) => setTimeout(resolve, 3000));
+    // await new Promise((resolve) => setTimeout(resolve, 3000));
 
     // Check for existing conversation with orderId
     const existingConversation = await conversationModel
       .findOne({
-        conversationType: "PRIVATE",
+        // conversationType: "PRIVATE",
         orderId: orderId,
         participants: {
           $all: [{ $elemMatch: { user: senderId } }, { $elemMatch: { user: receiverId } }],
         },
       })
       .populate("participants.user", "fullName phone email role profileImage");
+
+    console.log("existingConversation===>", existingConversation);
 
     // if (existingConversation) {
     //   res.status(200).json({

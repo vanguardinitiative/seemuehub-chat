@@ -51,16 +51,15 @@ const createPrivateConversation = async (req, res) => {
             res.status(400).json(config_1.messages.SELF_CONVERSATION_NOT_ALLOWED);
             return;
         }
-        await new Promise((resolve) => setTimeout(resolve, 3000));
         const existingConversation = await conversation_1.conversationModel
             .findOne({
-            conversationType: "PRIVATE",
             orderId: orderId,
             participants: {
                 $all: [{ $elemMatch: { user: senderId } }, { $elemMatch: { user: receiverId } }],
             },
         })
             .populate("participants.user", "fullName phone email role profileImage");
+        console.log("existingConversation===>", existingConversation);
         res.status(201).json({
             code: config_1.messages.CREATE_SUCCESSFUL.code,
             message: config_1.messages.CREATE_SUCCESSFUL.message,
