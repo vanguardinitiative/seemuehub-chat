@@ -173,7 +173,7 @@ const getConversation = async (req, res) => {
 exports.getConversation = getConversation;
 const getAllConversions = async (req, res) => {
     try {
-        const { search, skip = "0", limit = "100" } = req.query;
+        const { search, skip = "0", limit = "100", orderStatus } = req.query;
         const userId = req.user.userId;
         console.log("data   ===> ", req.user);
         const skipNumber = parseInt(skip, 10);
@@ -181,6 +181,14 @@ const getAllConversions = async (req, res) => {
         const query = {
             "participants.user": new mongoose_1.Types.ObjectId(userId),
         };
+        if (orderStatus) {
+            if (orderStatus === "NOT_COMPLETE") {
+                query.orderStatus = { $ne: conversation_1.OrderStatus.COMPLETED };
+            }
+            else {
+                query.orderStatus = orderStatus;
+            }
+        }
         if (search) {
             const userSearchResults = await user_1.userModel
                 .find({
@@ -202,7 +210,7 @@ const getAllConversions = async (req, res) => {
         console.log("query  ===> ", query);
         const conversations = await conversation_1.conversationModel
             .find(query)
-            .populate("participants.user", "fullName phone email role profileImage isOnline")
+            .populate("participants.user", "userName phone email role profileImage isOnline isFreelancer displayName")
             .sort({ updatedAt: -1 })
             .lean();
         const messageIds = conversations

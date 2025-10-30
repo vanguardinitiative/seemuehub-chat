@@ -1,5 +1,5 @@
 import { messages } from "@/config";
-import { conversationModel, UserType } from "@/models/conversation";
+import { conversationModel, OrderStatus, UserType } from "@/models/conversation";
 import { messageStatusModel } from "@/models/messageStatus";
 import { staffModel } from "@/models/staff";
 import { userModel } from "@/models/user";
@@ -214,10 +214,12 @@ interface QueryParams extends Record<string, unknown> {
   search?: string;
   skip?: string;
   limit?: string;
+  orderStatus?: string;
 }
 
 interface ConversationQuery {
   "participants.user": Types.ObjectId;
+  orderStatus?: any;
   $or?: Array<{
     conversationType?: "GROUP";
     conversationName?: { $regex: string; $options: string };
@@ -245,15 +247,21 @@ interface IConversationData {
 
 const getAllConversions = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { search, skip = "0", limit = "100" } = req.query as QueryParams;
+    const { search, skip = "0", limit = "100", orderStatus } = req.query as QueryParams;
     const userId = (req as any).user.userId;
     console.log("data   ===> ", (req as any).user);
     const skipNumber = parseInt(skip, 10);
     const limitNumber = parseInt(limit, 10);
-
     const query: ConversationQuery = {
       "participants.user": new Types.ObjectId(userId),
     };
+    if (orderStatus) {
+      if (orderStatus === "NOT_COMPLETE") {
+        query.orderStatus = { $ne: OrderStatus.COMPLETED };
+      } else {
+        query.orderStatus = orderStatus;
+      }
+    }
 
     if (search) {
       const userSearchResults = await userModel
@@ -282,7 +290,7 @@ const getAllConversions = async (req: Request, res: Response): Promise<void> => 
 
     const conversations = await conversationModel
       .find(query)
-      .populate("participants.user", "fullName phone email role profileImage isOnline")
+      .populate("participants.user", "userName phone email role profileImage isOnline isFreelancer displayName")
       .sort({ updatedAt: -1 })
       .lean<IConversationData[]>();
 
