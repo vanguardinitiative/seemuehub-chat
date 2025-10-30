@@ -10,6 +10,7 @@ const cors_1 = __importDefault(require("cors"));
 const database_1 = __importDefault(require("./config/database"));
 const socket_1 = require("./config/socket");
 const routes_1 = __importDefault(require("./routes"));
+const cron_1 = require("./services/cron");
 dotenv_1.default.config();
 (0, database_1.default)();
 const app = (0, express_1.default)();
@@ -24,6 +25,7 @@ const port = process.env.PORT || 8181;
 console.log("Server is starting...");
 const server = http_1.default.createServer(app);
 (0, socket_1.setupSocketService)(server);
+(0, cron_1.scheduleDailyCancellation)(2, 0);
 server.listen(port, () => {
     console.log(`Socket service running on port ${port}`);
 });

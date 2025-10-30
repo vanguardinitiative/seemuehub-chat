@@ -175,7 +175,6 @@ const getAllConversions = async (req, res) => {
     try {
         const { search, skip = "0", limit = "100", orderStatus } = req.query;
         const userId = req.user.userId;
-        console.log("data   ===> ", req.user);
         const skipNumber = parseInt(skip, 10);
         const limitNumber = parseInt(limit, 10);
         const query = {
@@ -183,11 +182,14 @@ const getAllConversions = async (req, res) => {
         };
         if (orderStatus) {
             if (orderStatus === "NOT_COMPLETE") {
-                query.orderStatus = { $ne: conversation_1.OrderStatus.COMPLETED };
+                query.orderStatus = { $nin: [conversation_1.OrderStatus.COMPLETED, conversation_1.OrderStatus.CANCELLED] };
             }
             else {
                 query.orderStatus = orderStatus;
             }
+        }
+        else {
+            query.orderStatus = { $ne: conversation_1.OrderStatus.CANCELLED };
         }
         if (search) {
             const userSearchResults = await user_1.userModel
