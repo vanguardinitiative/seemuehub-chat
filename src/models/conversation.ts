@@ -12,6 +12,19 @@ export enum UserType {
 }
 
 export enum OrderStatus {
+  Pending = "PENDING", // รอการยอมรับจาก freelancer
+  Accepted = "ACCEPTED", // Freelancer ยอมรับงานแล้ว
+  InProgress = "IN_PROGRESS", // กำลังดำเนินการ
+  InReview = "IN_REVIEW", // กำลังตรวจสอบงาน
+  RevisionRequested = "REVISION_REQUESTED", // ลูกค้าขอแก้ไขงาน
+  Delivered = "DELIVERED", // ส่งมอบงานแล้ว
+  Completed = "COMPLETED", // เสร็จสิ้น
+  Cancelled = "CANCELLED", // ยกเลิก
+  Refunded = "REFUNDED", // คืนเงิน
+  Disputed = "DISPUTED", // มีข้อพิพาท
+}
+
+export enum OrderStatus {
   PENDING = "PENDING",
   ACCEPTED = "ACCEPTED",
   IN_PROGRESS = "IN_PROGRESS",
@@ -39,6 +52,7 @@ interface ILatestMessageData {
   content?: string;
   sendAt?: Date;
   isDeleted: boolean;
+  orderStep?: OrderStatus;
 }
 
 export interface IConversation extends Document {
@@ -60,6 +74,7 @@ export interface IConversation extends Document {
   orderDeadline?: Date; // Order deadline
   isOrderActive?: boolean; // Whether the order is still active
   orderPriority?: "LOW" | "MEDIUM" | "HIGH" | "URGENT";
+  orderSender?: string;
 }
 
 const conversationSchema = new Schema<IConversation>(
@@ -104,6 +119,10 @@ const conversationSchema = new Schema<IConversation>(
         default: Date.now,
       },
       isDeleted: { type: Boolean, default: false },
+      orderStep: {
+        type: String,
+        enum: Object.values(OrderStatus),
+      },
     },
     background: String,
     // Order integration fields
@@ -128,6 +147,7 @@ const conversationSchema = new Schema<IConversation>(
       enum: ["LOW", "MEDIUM", "HIGH", "URGENT"],
       default: "MEDIUM",
     },
+    orderSender: String,
   },
   { timestamps: true }
 );

@@ -238,6 +238,25 @@ const subscribeToClient = async (io: Server): Promise<void> => {
         console.log("error core socket", error);
       }
     });
+    sub.subscribe("ORDER", async (message: string) => {
+      try {
+        const data: any = JSON.parse(message);
+
+        // Send ORDER notification to participants
+        const dataResponse = {
+          type: "ORDER",
+          response: data,
+        };
+        const participants = data.participants;
+        await Promise.all(
+          participants.map((participant: { user: any }) => {
+            io.to(participant.user.toString()).emit("CONVERSATION_LISTENING", dataResponse);
+          })
+        );
+      } catch (error) {
+        console.error("error core socket", error instanceof Error ? error.message : "Unknown error", error);
+      }
+    });
     console.log("Redis subscriptions set up successfully");
   } catch (error) {
     console.error("Error setting up Redis subscriptions:", error);
