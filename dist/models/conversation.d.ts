@@ -9,6 +9,18 @@ export declare enum UserType {
     ADMIN = "ADMIN"
 }
 export declare enum OrderStatus {
+    Pending = "PENDING",
+    Accepted = "ACCEPTED",
+    InProgress = "IN_PROGRESS",
+    InReview = "IN_REVIEW",
+    RevisionRequested = "REVISION_REQUESTED",
+    Delivered = "DELIVERED",
+    Completed = "COMPLETED",
+    Cancelled = "CANCELLED",
+    Refunded = "REFUNDED",
+    Disputed = "DISPUTED"
+}
+export declare enum OrderStatus {
     PENDING = "PENDING",
     ACCEPTED = "ACCEPTED",
     IN_PROGRESS = "IN_PROGRESS",
@@ -34,6 +46,7 @@ interface ILatestMessageData {
     content?: string;
     sendAt?: Date;
     isDeleted: boolean;
+    orderStep?: OrderStatus;
 }
 export interface IConversation extends Document {
     _id: mongoose.Types.ObjectId;
@@ -53,6 +66,7 @@ export interface IConversation extends Document {
     orderDeadline?: Date;
     isOrderActive?: boolean;
     orderPriority?: "LOW" | "MEDIUM" | "HIGH" | "URGENT";
+    orderSender?: string;
 }
 export { ConversationType };
 export declare const conversationModel: mongoose.Model<IConversation, {}, {}, {}, mongoose.Document<unknown, {}, IConversation, {}> & IConversation & Required<{

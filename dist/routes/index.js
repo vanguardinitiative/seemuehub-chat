@@ -8,10 +8,12 @@ const message_1 = __importDefault(require("./message"));
 const conversation_1 = __importDefault(require("./conversation"));
 const messageStatus_1 = __importDefault(require("./messageStatus"));
 const core_socket_1 = __importDefault(require("./core-socket"));
+const order_1 = __importDefault(require("./order"));
 const router = (0, express_1.Router)();
 router.use("/messages", message_1.default);
 router.use("/conversations", conversation_1.default);
 router.use("/message-status", messageStatus_1.default);
 router.use("/core-socket", core_socket_1.default);
+router.use("/orders", order_1.default);
 exports.default = router;
 //# sourceMappingURL=index.js.map

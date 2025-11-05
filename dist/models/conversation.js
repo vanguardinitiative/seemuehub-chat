@@ -48,6 +48,18 @@ var UserType;
 })(UserType || (exports.UserType = UserType = {}));
 var OrderStatus;
 (function (OrderStatus) {
+    OrderStatus["Pending"] = "PENDING";
+    OrderStatus["Accepted"] = "ACCEPTED";
+    OrderStatus["InProgress"] = "IN_PROGRESS";
+    OrderStatus["InReview"] = "IN_REVIEW";
+    OrderStatus["RevisionRequested"] = "REVISION_REQUESTED";
+    OrderStatus["Delivered"] = "DELIVERED";
+    OrderStatus["Completed"] = "COMPLETED";
+    OrderStatus["Cancelled"] = "CANCELLED";
+    OrderStatus["Refunded"] = "REFUNDED";
+    OrderStatus["Disputed"] = "DISPUTED";
+})(OrderStatus || (exports.OrderStatus = OrderStatus = {}));
+(function (OrderStatus) {
     OrderStatus["PENDING"] = "PENDING";
     OrderStatus["ACCEPTED"] = "ACCEPTED";
     OrderStatus["IN_PROGRESS"] = "IN_PROGRESS";
@@ -100,6 +112,10 @@ const conversationSchema = new mongoose_1.Schema({
             default: Date.now,
         },
         isDeleted: { type: Boolean, default: false },
+        orderStep: {
+            type: String,
+            enum: Object.values(OrderStatus),
+        },
     },
     background: String,
     orderStatus: {
@@ -123,6 +139,7 @@ const conversationSchema = new mongoose_1.Schema({
         enum: ["LOW", "MEDIUM", "HIGH", "URGENT"],
         default: "MEDIUM",
     },
+    orderSender: String,
 }, { timestamps: true });
 conversationSchema.index({ "participants.user": 1, conversationType: 1 });
 conversationSchema.index({ updatedAt: -1 });
