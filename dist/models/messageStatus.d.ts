@@ -12,8 +12,8 @@ export interface IMessageStatus extends Document {
     status: MessageStatusType;
 }
 export { MessageStatusType };
-export declare const messageStatusModel: mongoose.Model<IMessageStatus, {}, {}, {}, mongoose.Document<unknown, {}, IMessageStatus, {}> & IMessageStatus & Required<{
-    _id: unknown;
+export declare const messageStatusModel: mongoose.Model<IMessageStatus, {}, {}, {}, mongoose.Document<unknown, {}, IMessageStatus, {}, {}> & IMessageStatus & Required<{
+    _id: mongoose.Types.ObjectId;
 }> & {
     __v: number;
 }, any>;

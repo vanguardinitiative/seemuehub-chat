@@ -2,7 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.redisConfig = exports.subscribeToClient = exports.sub = exports.pub = void 0;
 const redis_1 = require("redis");
-const user_1 = require("../models/user");
+const user_1 = require("../models/user.js");
 const env_1 = require("./env");
 const redisConfig = {
     socket: {

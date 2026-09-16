@@ -4,11 +4,11 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.messageNotification = exports.createOrGetConversation = void 0;
-const conversation_1 = require("../../models/conversation");
-const messageStatus_1 = require("../../models/messageStatus");
-const user_1 = require("../../models/user");
+const conversation_1 = require("../../models/conversation.js");
+const messageStatus_1 = require("../../models/messageStatus.js");
+const user_1 = require("../../models/user.js");
 const axios_1 = __importDefault(require("axios"));
-const staff_1 = require("../../models/staff");
+const staff_1 = require("../../models/staff.js");
 const createOrGetConversation = async (senderId, receiverId, session) => {
     const conversation = await conversation_1.conversationModel
         .findOne({

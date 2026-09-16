@@ -3,7 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.setupSocketService = void 0;
 const socket_io_1 = require("socket.io");
 const redis_1 = require("./redis");
-const message_1 = require("../controllers/message");
+const message_1 = require("../controllers/message/index.js");
 const setupSocketService = (server) => {
     const io = new socket_io_1.Server(server, {
         cors: {

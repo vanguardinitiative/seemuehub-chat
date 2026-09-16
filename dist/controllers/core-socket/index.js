@@ -1,8 +1,8 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.coreSocketController = void 0;
-const config_1 = require("../../config");
-const redis_1 = require("../../config/redis");
+const config_1 = require("../../config/index.js");
+const redis_1 = require("../../config/redis.js");
 const coreSocketController = async (req, res) => {
     try {
         console.log("🔔 Payment received from backend", req.body);

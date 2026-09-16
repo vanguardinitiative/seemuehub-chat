@@ -69,7 +69,7 @@ export interface IConversation extends Document {
     orderSender?: string;
 }
 export { ConversationType };
-export declare const conversationModel: mongoose.Model<IConversation, {}, {}, {}, mongoose.Document<unknown, {}, IConversation, {}> & IConversation & Required<{
+export declare const conversationModel: mongoose.Model<IConversation, {}, {}, {}, mongoose.Document<unknown, {}, IConversation, {}, {}> & IConversation & Required<{
     _id: mongoose.Types.ObjectId;
 }> & {
     __v: number;
