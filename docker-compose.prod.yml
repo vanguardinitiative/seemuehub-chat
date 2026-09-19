@@ -1,0 +1,8 @@
+services:
+  seemuehub-chat:
+    container_name: seemuehub-chat
+    restart: unless-stopped
+    build: .
+    env_file: .env
+    ports:
+      - "8181:8181"

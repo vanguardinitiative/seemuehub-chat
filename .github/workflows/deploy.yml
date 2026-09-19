@@ -1,0 +1,34 @@
+name: Deploy Seemuehub Chat
+
+on:
+  push:
+    branches: [dev]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - run: git archive --format=tar.gz -o app.tar.gz HEAD
+
+    - uses: appleboy/scp-action@master
+      with:
+        host: ${{ secrets.EC2_HOST }}
+        username: ${{ secrets.EC2_USERNAME }}
+        key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
+        source: app.tar.gz
+        target: /tmp
+
+    - uses: appleboy/ssh-action@master
+      with:
+        host: ${{ secrets.EC2_HOST }}
+        username: ${{ secrets.EC2_USERNAME }}
+        key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
+        script: |
+          mkdir -p ~/seemuehub-chat && cd ~/seemuehub-chat
+          tar -xzf /tmp/app.tar.gz
+          cat > .env << 'EOF'
+          ${{ secrets.ENV }}
+          EOF
+          sudo docker compose -f docker-compose.prod.yml up -d --build
