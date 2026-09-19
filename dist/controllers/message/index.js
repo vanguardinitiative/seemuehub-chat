@@ -10,6 +10,7 @@ const message_1 = require("../../models/message");
 const redis_1 = require("../../config/redis");
 const helper_1 = require("./helper");
 const config_1 = require("../../config");
+const conversation_access_1 = require("../../utils/conversation-access");
 const sendPrivateMessage = async (socket, io, data) => {
     const session = await mongoose_1.default.startSession();
     try {
@@ -123,8 +124,22 @@ const getAllMessage = async (req, res) => {
         const { skip = "0", limit = "30", conversationId } = req.query;
         const skipNumber = parseInt(skip, 10);
         const limitNumber = parseInt(limit, 10);
+        const userId = (0, conversation_access_1.userIdOf)(req);
+        if (!userId) {
+            res.status(401).json(config_1.messages.UNAUTHORIZED);
+            return;
+        }
         if (!conversationId) {
             res.status(400).json(config_1.messages.CONVERSATION_ID_REQUIRED);
+            return;
+        }
+        if (!mongoose_1.default.Types.ObjectId.isValid(String(conversationId))) {
+            res.status(400).json(config_1.messages.INVALID_CONVERSATION_ID);
+            return;
+        }
+        if (!(await (0, conversation_access_1.isParticipant)(String(conversationId), userId))) {
+            console.warn("[access] message read refused", { conversationId, userId });
+            res.status(404).json(config_1.messages.CONVERSATION_NOT_FOUND);
             return;
         }
         const message = await message_1.messageModel
@@ -151,14 +166,24 @@ const getAllMessageHistory = async (req, res) => {
         const { skip = "0", limit = "30", orderId } = req.query;
         const skipNumber = parseInt(skip, 10);
         const limitNumber = parseInt(limit, 10);
+        const userId = (0, conversation_access_1.userIdOf)(req);
+        if (!userId) {
+            res.status(401).json(config_1.messages.UNAUTHORIZED);
+            return;
+        }
         if (!orderId) {
             res.status(400).json(config_1.messages.CONVERSATION_ID_REQUIRED);
             return;
         }
-        const conversation = await conversation_1.conversationModel.findOne({
+        const conversation = await conversation_1.conversationModel
+            .findOne({
             orderId: orderId,
-        });
+            ...(0, conversation_access_1.participantOf)(userId),
+        })
+            .select("_id")
+            .lean();
         if (!conversation) {
+            console.warn("[access] message history refused", { orderId, userId });
             res.status(404).json(config_1.messages.CONVERSATION_NOT_FOUND);
             return;
         }

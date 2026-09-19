@@ -6,13 +6,33 @@ import { userModel } from "@/models/user";
 import { Request, Response } from "express";
 import mongoose, { Types } from "mongoose";
 import { StaffRole } from "./helper";
+import { participantOf, userIdOf } from "@/utils/conversation-access";
 
 const createPrivateConversation = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { senderId, receiverId, orderId, orderStatus, orderTitle, orderBudget, orderDeadline, orderPriority } =
-      req.body;
+    const { receiverId, orderId, orderStatus, orderTitle, orderBudget, orderDeadline, orderPriority } = req.body;
 
-    if (!senderId || !receiverId) {
+    // The sender is whoever holds the token, full stop.
+    //
+    // Reading it from the body made this an unauthenticated oracle: post any two
+    // user ids and the $all filter below would tell you whether they have a
+    // conversation, hand back its id, and populate both parties' contact
+    // details. Taking it from the token also makes that same filter do the
+    // authorization work, since a caller can now only ever match conversations
+    // they are in.
+    //
+    // Both web call sites already send senderId = the current user, so this
+    // changes nothing for the real client.
+    const senderId = userIdOf(req);
+    if (!senderId) {
+      res.status(401).json(messages.UNAUTHORIZED);
+      return;
+    }
+    if (req.body.senderId && String(req.body.senderId) !== senderId) {
+      console.warn("[access] senderId in body ignored", { claimed: req.body.senderId, actual: senderId });
+    }
+
+    if (!receiverId) {
       res.status(400).json(messages.BAD_REQUEST);
       return;
     }
@@ -187,14 +207,32 @@ const getConversation = async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
-    console.log("Registered models:", mongoose.modelNames());
+    const userId = userIdOf(req);
+    if (!userId) {
+      res.status(401).json(messages.UNAUTHORIZED);
+      return;
+    }
+
+    // findOne({_id}) on a string that is not an ObjectId throws a CastError,
+    // which this handler's catch turns into a 500. It is a bad request.
+    if (!Types.ObjectId.isValid(String(id))) {
+      res.status(400).json(messages.INVALID_CONVERSATION_ID);
+      return;
+    }
 
     const conversation = await conversationModel
       .findOne({
         _id: id,
+        ...participantOf(userId),
       })
       .populate("participants.user", "fullName phone email role profileImage");
     if (!conversation) {
+      // 404 rather than 403, and deliberately the same 404 a missing
+      // conversation gets. A 403 would confirm the id is real, which is exactly
+      // what an enumerator is after — ObjectIds carry a timestamp prefix, so ids
+      // near a known one are cheap to guess. The two cases are separated in the
+      // log, not in the response.
+      console.warn("[access] conversation read refused", { conversationId: id, userId });
       res.status(404).json(messages.CONVERSATION_NOT_FOUND);
       return;
     }

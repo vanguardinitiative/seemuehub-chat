@@ -34,8 +34,8 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
 const message_1 = require("../controllers/message");
-const express_1 = require("express");
 const middleware_1 = require("../middleware");
+const express_1 = require("express");
 const conversation_1 = require("../models/conversation");
 const message_2 = require("../models/message");
 const mongoose_1 = __importStar(require("mongoose"));
@@ -52,12 +52,29 @@ messageRoute.post("/", middleware_1.checkAuthorizationMiddleware, async (req, re
         if (sendAsOrganizationId) {
             if (String(conversation.organizationId) !== String(sendAsOrganizationId))
                 return void res.status(403).json({ success: false, errors: { code: "ORGANIZATION_CONVERSATION_MISMATCH" } });
-            const membership = await OrgMember.findOne({ organizationId: sendAsOrganizationId, userId: actorUserId, status: "ACTIVE" }).lean();
+            const membership = await OrgMember.findOne({
+                organizationId: sendAsOrganizationId,
+                userId: actorUserId,
+                status: "ACTIVE",
+            }).lean();
             if (!membership)
                 return void res.status(403).json({ success: false, errors: { code: "ORGANIZATION_MEMBERSHIP_REQUIRED" } });
         }
-        const message = await message_2.messageModel.create({ sender: actorUserId, actorUserId, sendAsOrganizationId, conversation: conversationId, content: body ?? content, messageType: "TEXT" });
-        conversation.latestMessageData = { senderId: actorUserId, messageId: String(message._id), content: message.content, sendAt: message.sendAt, isDeleted: false };
+        const message = await message_2.messageModel.create({
+            sender: actorUserId,
+            actorUserId,
+            sendAsOrganizationId,
+            conversation: conversationId,
+            content: body ?? content,
+            messageType: "TEXT",
+        });
+        conversation.latestMessageData = {
+            senderId: actorUserId,
+            messageId: String(message._id),
+            content: message.content,
+            sendAt: message.sendAt,
+            isDeleted: false,
+        };
         await conversation.save();
         res.status(201).json({ success: true, data: message });
     }
@@ -65,7 +82,7 @@ messageRoute.post("/", middleware_1.checkAuthorizationMiddleware, async (req, re
         res.status(500).json({ success: false, errors: { code: "INTERNAL_EXCEPTION", message: "Something went wrong" } });
     }
 });
-messageRoute.get("/histories", message_1.getAllMessageHistory);
-messageRoute.get("/", message_1.getAllMessage);
+messageRoute.get("/histories", middleware_1.checkAuthorizationMiddleware, message_1.getAllMessageHistory);
+messageRoute.get("/", middleware_1.checkAuthorizationMiddleware, message_1.getAllMessage);
 exports.default = messageRoute;
 //# sourceMappingURL=message.js.map

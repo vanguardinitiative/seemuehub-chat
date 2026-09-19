@@ -7,6 +7,7 @@ import { pub } from "@/config/redis";
 import { createOrGetConversation, messageNotification } from "./helper";
 import { messages } from "@/config";
 import { messageStatusModel } from "@/models/messageStatus";
+import { isParticipant, participantOf, userIdOf } from "@/utils/conversation-access";
 
 interface MessageData {
   messageType: string;
@@ -201,10 +202,30 @@ const getAllMessage = async (req: Request, res: Response): Promise<void> => {
     const skipNumber = parseInt(skip as string, 10);
     const limitNumber = parseInt(limit as string, 10);
 
+    const userId = userIdOf(req);
+    if (!userId) {
+      res.status(401).json(messages.UNAUTHORIZED);
+      return;
+    }
     if (!conversationId) {
       res.status(400).json(messages.CONVERSATION_ID_REQUIRED);
       return;
     }
+    if (!mongoose.Types.ObjectId.isValid(String(conversationId))) {
+      res.status(400).json(messages.INVALID_CONVERSATION_ID);
+      return;
+    }
+
+    // messageModel has no participants array of its own to filter on, so
+    // membership has to be established against the conversation first. Without
+    // this the endpoint returned every message body to anyone holding any valid
+    // token — and before the route gained middleware, to anyone at all.
+    if (!(await isParticipant(String(conversationId), userId))) {
+      console.warn("[access] message read refused", { conversationId, userId });
+      res.status(404).json(messages.CONVERSATION_NOT_FOUND);
+      return;
+    }
+
     const message = await messageModel
       .find({ conversation: conversationId })
       .sort({ createdAt: -1 })
@@ -229,14 +250,28 @@ const getAllMessageHistory = async (req: Request, res: Response): Promise<void> 
     const skipNumber = parseInt(skip as string, 10);
     const limitNumber = parseInt(limit as string, 10);
 
+    const userId = userIdOf(req);
+    if (!userId) {
+      res.status(401).json(messages.UNAUTHORIZED);
+      return;
+    }
     if (!orderId) {
       res.status(400).json(messages.CONVERSATION_ID_REQUIRED);
       return;
     }
-    const conversation = await conversationModel.findOne({
-      orderId: orderId,
-    });
+
+    // No extra query needed here — this lookup already existed, it just was not
+    // scoped to the caller. The tightened filter rides the existing
+    // {"participants.user":1, orderId:1} compound index.
+    const conversation = await conversationModel
+      .findOne({
+        orderId: orderId,
+        ...participantOf(userId),
+      })
+      .select("_id")
+      .lean();
     if (!conversation) {
+      console.warn("[access] message history refused", { orderId, userId });
       res.status(404).json(messages.CONVERSATION_NOT_FOUND);
       return;
     }
