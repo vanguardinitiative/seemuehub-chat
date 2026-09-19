@@ -24,5 +24,5 @@ COPY --from=build /usr/src/app /usr/src/app
 RUN npm install nodemon -g
 
 # Command to run the application
-CMD ["npm", "run", "start:dev2"]
-# CMD ["npm", "run", "start:prod"]
+# CMD ["npm", "run", "start:dev2"]
+CMD ["npm", "run", "start"]
