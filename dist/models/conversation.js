@@ -140,6 +140,8 @@ const conversationSchema = new mongoose_1.Schema({
         default: "MEDIUM",
     },
     orderSender: String,
+    organizationId: { type: mongoose_1.Schema.Types.ObjectId, ref: "Organization", index: true },
+    applicationId: { type: mongoose_1.Schema.Types.ObjectId, ref: "OrganizationApplication", index: true },
 }, { timestamps: true });
 conversationSchema.index({ "participants.user": 1, conversationType: 1 });
 conversationSchema.index({ updatedAt: -1 });
@@ -147,5 +149,6 @@ conversationSchema.index({ orderId: 1, isOrderActive: 1 });
 conversationSchema.index({ orderStatus: 1, isOrderActive: 1 });
 conversationSchema.index({ orderPriority: 1, orderDeadline: 1 });
 conversationSchema.index({ "participants.user": 1, orderId: 1 });
+conversationSchema.index({ organizationId: 1, updatedAt: -1 });
 exports.conversationModel = mongoose_1.default.model("Conversation", conversationSchema);
 //# sourceMappingURL=conversation.js.map

@@ -75,6 +75,8 @@ export interface IConversation extends Document {
   isOrderActive?: boolean; // Whether the order is still active
   orderPriority?: "LOW" | "MEDIUM" | "HIGH" | "URGENT";
   orderSender?: string;
+  organizationId?: mongoose.Types.ObjectId;
+  applicationId?: mongoose.Types.ObjectId;
 }
 
 const conversationSchema = new Schema<IConversation>(
@@ -148,6 +150,8 @@ const conversationSchema = new Schema<IConversation>(
       default: "MEDIUM",
     },
     orderSender: String,
+    organizationId: { type: Schema.Types.ObjectId, ref: "Organization", index: true },
+    applicationId: { type: Schema.Types.ObjectId, ref: "OrganizationApplication", index: true },
   },
   { timestamps: true }
 );
@@ -163,6 +167,7 @@ conversationSchema.index({ orderId: 1, isOrderActive: 1 });
 conversationSchema.index({ orderStatus: 1, isOrderActive: 1 });
 conversationSchema.index({ orderPriority: 1, orderDeadline: 1 });
 conversationSchema.index({ "participants.user": 1, orderId: 1 });
+conversationSchema.index({ organizationId: 1, updatedAt: -1 });
 
 export { ConversationType };
 export const conversationModel = mongoose.model<IConversation>("Conversation", conversationSchema);

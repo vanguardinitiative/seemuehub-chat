@@ -147,6 +147,8 @@ const messageSchema = new mongoose_1.Schema({
         default: false,
         index: true,
     },
+    sendAsOrganizationId: { type: mongoose_1.Schema.Types.ObjectId, ref: "Organization", index: true },
+    actorUserId: { type: mongoose_1.Schema.Types.ObjectId, ref: "User" },
 }, { timestamps: true });
 messageSchema.index({ orderId: 1, isOrderMessage: 1 });
 messageSchema.index({ conversation: 1, isOrderMessage: 1 });

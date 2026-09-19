@@ -69,6 +69,8 @@ export interface IMessage extends Document {
         metadata?: any;
     };
     isOrderMessage?: boolean;
+    sendAsOrganizationId?: mongoose.Types.ObjectId;
+    actorUserId?: mongoose.Types.ObjectId;
 }
 export { MessageType, CallStatus };
 export declare const messageModel: mongoose.Model<IMessage, {}, {}, {}, mongoose.Document<unknown, {}, IMessage, {}> & IMessage & Required<{

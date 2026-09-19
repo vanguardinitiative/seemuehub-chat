@@ -89,6 +89,8 @@ export interface IMessage extends Document {
     metadata?: any; // Additional data for the action
   };
   isOrderMessage?: boolean; // Whether this is an order-related message
+  sendAsOrganizationId?: mongoose.Types.ObjectId;
+  actorUserId?: mongoose.Types.ObjectId;
 }
 
 const messageSchema = new Schema<IMessage>(
@@ -163,6 +165,8 @@ const messageSchema = new Schema<IMessage>(
       default: false,
       index: true,
     },
+    sendAsOrganizationId: { type: Schema.Types.ObjectId, ref: "Organization", index: true },
+    actorUserId: { type: Schema.Types.ObjectId, ref: "User" },
   },
   { timestamps: true }
 );

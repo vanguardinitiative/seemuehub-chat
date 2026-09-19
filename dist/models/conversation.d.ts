@@ -67,6 +67,8 @@ export interface IConversation extends Document {
     isOrderActive?: boolean;
     orderPriority?: "LOW" | "MEDIUM" | "HIGH" | "URGENT";
     orderSender?: string;
+    organizationId?: mongoose.Types.ObjectId;
+    applicationId?: mongoose.Types.ObjectId;
 }
 export { ConversationType };
 export declare const conversationModel: mongoose.Model<IConversation, {}, {}, {}, mongoose.Document<unknown, {}, IConversation, {}> & IConversation & Required<{
