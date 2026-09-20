@@ -3,3 +3,7 @@ node_modules/
 .env
 package-lock.json
 pnpm-lock.yaml
+
+# Build output. The image compiles this itself (see Dockerfile); committing it
+# made the deployment artifact something a human had to remember to rebuild.
+dist/

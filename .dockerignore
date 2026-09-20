@@ -1,0 +1,9 @@
+node_modules
+npm-debug.log
+# Never copy a dist from the build context: the image compiles its own, and a
+# stale dist left on the deploy host would silently win.
+dist
+.git
+.github
+.env*
+tests
