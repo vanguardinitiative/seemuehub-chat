@@ -1,0 +1,1 @@
+{"version":3,"file":"admin.d.ts","sourceRoot":"","sources":["../../../src/controllers/conversation/admin.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAE,OAAO,EAAE,QAAQ,EAAE,MAAM,SAAS,CAAC;AAkBjD,QAAA,MAAM,wBAAwB,GAAU,KAAK,OAAO,EAAE,KAAK,QAAQ,KAAG,OAAO,CAAC,IAAI,CAmDjF,CAAC;AAEF,OAAO,EAAE,wBAAwB,EAAE,CAAC"}

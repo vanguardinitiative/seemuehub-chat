@@ -33,11 +33,13 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-const message_1 = require("../controllers/message");
-const middleware_1 = require("../middleware");
+const message_1 = require("../controllers/message/index.js");
+const middleware_1 = require("../middleware/index.js");
+const admin_1 = require("../middleware/admin.js");
+const admin_2 = require("../controllers/message/admin.js");
 const express_1 = require("express");
-const conversation_1 = require("../models/conversation");
-const message_2 = require("../models/message");
+const conversation_1 = require("../models/conversation.js");
+const message_2 = require("../models/message.js");
 const mongoose_1 = __importStar(require("mongoose"));
 const messageRoute = (0, express_1.Router)();
 const orgMemberSchema = new mongoose_1.Schema({ organizationId: mongoose_1.Schema.Types.ObjectId, userId: mongoose_1.Schema.Types.ObjectId, status: String }, { collection: "organizationmembers" });
@@ -82,6 +84,7 @@ messageRoute.post("/", middleware_1.checkAuthorizationMiddleware, async (req, re
         res.status(500).json({ success: false, errors: { code: "INTERNAL_EXCEPTION", message: "Something went wrong" } });
     }
 });
+messageRoute.get("/admin", middleware_1.checkAuthorizationMiddleware, admin_1.requireAdminMiddleware, admin_2.getMessagesAdmin);
 messageRoute.get("/histories", middleware_1.checkAuthorizationMiddleware, message_1.getAllMessageHistory);
 messageRoute.get("/", middleware_1.checkAuthorizationMiddleware, message_1.getAllMessage);
 exports.default = messageRoute;

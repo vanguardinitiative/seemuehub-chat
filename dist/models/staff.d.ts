@@ -27,8 +27,8 @@ export interface IStaff extends Document {
     userID: string;
     country: string;
 }
-export declare const staffModel: mongoose.Model<IStaff, {}, {}, {}, mongoose.Document<unknown, {}, IStaff, {}> & IStaff & Required<{
-    _id: unknown;
+export declare const staffModel: mongoose.Model<IStaff, {}, {}, {}, mongoose.Document<unknown, {}, IStaff, {}, {}> & IStaff & Required<{
+    _id: mongoose.Types.ObjectId;
 }> & {
     __v: number;
 }, any>;

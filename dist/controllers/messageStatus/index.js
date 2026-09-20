@@ -1,11 +1,11 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.updateReadStatus = void 0;
-const message_1 = require("../../models/message");
-const messageStatus_1 = require("../../models/messageStatus");
-const config_1 = require("../../config");
-const conversation_1 = require("../../models/conversation");
-const redis_1 = require("../../config/redis");
+const message_1 = require("../../models/message.js");
+const messageStatus_1 = require("../../models/messageStatus.js");
+const config_1 = require("../../config/index.js");
+const conversation_1 = require("../../models/conversation.js");
+const redis_1 = require("../../config/redis.js");
 const updateReadStatus = async (req, res) => {
     try {
         console.log("user data", req.user);

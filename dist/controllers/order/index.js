@@ -1,10 +1,10 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.orderController = void 0;
-const config_1 = require("../../config");
-const redis_1 = require("../../config/redis");
-const conversation_1 = require("../../models/conversation");
-const message_1 = require("../../models/message");
+const config_1 = require("../../config/index.js");
+const redis_1 = require("../../config/redis.js");
+const conversation_1 = require("../../models/conversation.js");
+const message_1 = require("../../models/message.js");
 const handleOrderStatusUpdate = async (orderData) => {
     try {
         const { orderId, orderStatus, orderSender, _id } = orderData;

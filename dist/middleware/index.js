@@ -4,7 +4,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.checkAuthorizationMiddleware = void 0;
-const config_1 = require("../config");
+const config_1 = require("../config/index.js");
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 const checkAuthorizationMiddleware = async (req, res, next) => {
     try {

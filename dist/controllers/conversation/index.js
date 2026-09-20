@@ -1,13 +1,13 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.getAllConversions = exports.getConversation = exports.createGroupConversation = exports.createPrivateConversation = void 0;
-const config_1 = require("../../config");
-const conversation_1 = require("../../models/conversation");
-const messageStatus_1 = require("../../models/messageStatus");
-const staff_1 = require("../../models/staff");
-const user_1 = require("../../models/user");
+const config_1 = require("../../config/index.js");
+const conversation_1 = require("../../models/conversation.js");
+const messageStatus_1 = require("../../models/messageStatus.js");
+const staff_1 = require("../../models/staff.js");
+const user_1 = require("../../models/user.js");
 const mongoose_1 = require("mongoose");
-const conversation_access_1 = require("../../utils/conversation-access");
+const conversation_access_1 = require("../../utils/conversation-access.js");
 const createPrivateConversation = async (req, res) => {
     try {
         const { receiverId, orderId, orderStatus, orderTitle, orderBudget, orderDeadline, orderPriority } = req.body;

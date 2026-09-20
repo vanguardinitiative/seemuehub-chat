@@ -73,7 +73,7 @@ export interface IMessage extends Document {
     actorUserId?: mongoose.Types.ObjectId;
 }
 export { MessageType, CallStatus };
-export declare const messageModel: mongoose.Model<IMessage, {}, {}, {}, mongoose.Document<unknown, {}, IMessage, {}> & IMessage & Required<{
+export declare const messageModel: mongoose.Model<IMessage, {}, {}, {}, mongoose.Document<unknown, {}, IMessage, {}, {}> & IMessage & Required<{
     _id: mongoose.Types.ObjectId;
 }> & {
     __v: number;

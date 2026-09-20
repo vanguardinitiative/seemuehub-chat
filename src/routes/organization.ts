@@ -13,7 +13,7 @@ const requireMember = async (organizationId: string, userId: string) => Member.f
 router.use(checkAuthorizationMiddleware);
 router.get("/:id/conversations", async (req: Request, res: Response) => {
   try {
-    if (!(await requireMember(req.params.id, uid(req)))) return void res.status(403).json({ success: false, errors: { code: "ORGANIZATION_MEMBERSHIP_REQUIRED", message: "Active organization membership is required" } });
+    if (!(await requireMember(String(req.params.id), uid(req)))) return void res.status(403).json({ success: false, errors: { code: "ORGANIZATION_MEMBERSHIP_REQUIRED", message: "Active organization membership is required" } });
     const skip = Math.max(0, Number(req.query.skip ?? 0)), limit = Math.min(100, Math.max(1, Number(req.query.limit ?? 50)));
     const conversations = await conversationModel.find({ organizationId: req.params.id }).populate("participants.user", "fullName userName displayName email profileImage").sort({ updatedAt: -1 }).skip(skip).limit(limit).lean();
     res.json({ success: true, data: { conversations } });
@@ -21,7 +21,7 @@ router.get("/:id/conversations", async (req: Request, res: Response) => {
 });
 router.post("/:id/conversations", async (req: Request, res: Response) => {
   try {
-    const actor = uid(req); if (!(await requireMember(req.params.id, actor))) return void res.status(403).json({ success: false, errors: { code: "ORGANIZATION_MEMBERSHIP_REQUIRED" } });
+    const actor = uid(req); if (!(await requireMember(String(req.params.id), actor))) return void res.status(403).json({ success: false, errors: { code: "ORGANIZATION_MEMBERSHIP_REQUIRED" } });
     const { participantUserId, applicationId } = req.body; if (!mongoose.isValidObjectId(participantUserId)) return void res.status(400).json({ success: false, errors: { code: "VALIDATION_ERROR", message: "participantUserId is required" } });
     let item = await conversationModel.findOne({ organizationId: req.params.id, applicationId: applicationId || null, "participants.user": participantUserId });
     if (!item) item = await conversationModel.create({ organizationId: req.params.id, applicationId, conversationType: "PRIVATE", conversationName: "ORGANIZATION_CONVERSATION", participants: [{ user: participantUserId, userType: "USER" }], latestMessageData: { isDeleted: false } });

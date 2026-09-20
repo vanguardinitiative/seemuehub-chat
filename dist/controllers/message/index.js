@@ -5,12 +5,12 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.getAllMessageHistory = exports.getAllMessage = exports.sendGroupMessage = exports.sendPrivateMessage = void 0;
 const mongoose_1 = __importDefault(require("mongoose"));
-const conversation_1 = require("../../models/conversation");
-const message_1 = require("../../models/message");
-const redis_1 = require("../../config/redis");
+const conversation_1 = require("../../models/conversation.js");
+const message_1 = require("../../models/message.js");
+const redis_1 = require("../../config/redis.js");
 const helper_1 = require("./helper");
-const config_1 = require("../../config");
-const conversation_access_1 = require("../../utils/conversation-access");
+const config_1 = require("../../config/index.js");
+const conversation_access_1 = require("../../utils/conversation-access.js");
 const sendPrivateMessage = async (socket, io, data) => {
     const session = await mongoose_1.default.startSession();
     try {

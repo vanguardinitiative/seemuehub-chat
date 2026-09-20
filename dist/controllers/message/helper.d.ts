@@ -1,7 +1,7 @@
-import { IConversation } from "../../models/conversation";
-import { IMessage } from "../../models/message";
+import { IConversation } from "../../models/conversation.js";
+import { IMessage } from "../../models/message.js";
 import mongoose from "mongoose";
-export declare const createOrGetConversation: (senderId: string, receiverId: string, session: mongoose.ClientSession) => Promise<mongoose.Document<unknown, {}, IConversation, {}> & IConversation & Required<{
+export declare const createOrGetConversation: (senderId: string, receiverId: string, session: mongoose.ClientSession) => Promise<mongoose.Document<unknown, {}, IConversation, {}, {}> & IConversation & Required<{
     _id: mongoose.Types.ObjectId;
 }> & {
     __v: number;

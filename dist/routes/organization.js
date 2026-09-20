@@ -35,9 +35,9 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const mongoose_1 = __importStar(require("mongoose"));
-const middleware_1 = require("../middleware");
-const conversation_1 = require("../models/conversation");
-const message_1 = require("../models/message");
+const middleware_1 = require("../middleware/index.js");
+const conversation_1 = require("../models/conversation.js");
+const message_1 = require("../models/message.js");
 const router = (0, express_1.Router)();
 const memberSchema = new mongoose_1.Schema({ organizationId: mongoose_1.Schema.Types.ObjectId, userId: mongoose_1.Schema.Types.ObjectId, role: String, status: String }, { collection: "organizationmembers" });
 const Member = mongoose_1.default.models.OrganizationMember ?? mongoose_1.default.model("OrganizationMember", memberSchema);
@@ -46,7 +46,7 @@ const requireMember = async (organizationId, userId) => Member.findOne({ organiz
 router.use(middleware_1.checkAuthorizationMiddleware);
 router.get("/:id/conversations", async (req, res) => {
     try {
-        if (!(await requireMember(req.params.id, uid(req))))
+        if (!(await requireMember(String(req.params.id), uid(req))))
             return void res.status(403).json({ success: false, errors: { code: "ORGANIZATION_MEMBERSHIP_REQUIRED", message: "Active organization membership is required" } });
         const skip = Math.max(0, Number(req.query.skip ?? 0)), limit = Math.min(100, Math.max(1, Number(req.query.limit ?? 50)));
         const conversations = await conversation_1.conversationModel.find({ organizationId: req.params.id }).populate("participants.user", "fullName userName displayName email profileImage").sort({ updatedAt: -1 }).skip(skip).limit(limit).lean();
@@ -59,7 +59,7 @@ router.get("/:id/conversations", async (req, res) => {
 router.post("/:id/conversations", async (req, res) => {
     try {
         const actor = uid(req);
-        if (!(await requireMember(req.params.id, actor)))
+        if (!(await requireMember(String(req.params.id), actor)))
             return void res.status(403).json({ success: false, errors: { code: "ORGANIZATION_MEMBERSHIP_REQUIRED" } });
         const { participantUserId, applicationId } = req.body;
         if (!mongoose_1.default.isValidObjectId(participantUserId))

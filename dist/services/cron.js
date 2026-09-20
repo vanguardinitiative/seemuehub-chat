@@ -2,7 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.cancelStalePendingConversations = cancelStalePendingConversations;
 exports.scheduleDailyCancellation = scheduleDailyCancellation;
-const conversation_1 = require("../models/conversation");
+const conversation_1 = require("../models/conversation.js");
 function getOneMonthAgo() {
     const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
     return new Date(Date.now() - THIRTY_DAYS_MS);

@@ -2,7 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.isParticipant = exports.userIdOf = exports.participantOf = void 0;
 const mongoose_1 = require("mongoose");
-const conversation_1 = require("../models/conversation");
+const conversation_1 = require("../models/conversation.js");
 const participantOf = (userId) => ({
     "participants.user": new mongoose_1.Types.ObjectId(userId),
 });

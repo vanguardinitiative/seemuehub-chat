@@ -33,7 +33,7 @@ export interface IUser extends Document {
     isOnline?: boolean;
     socketId?: string;
 }
-export declare const userModel: mongoose.Model<IUser, {}, {}, {}, mongoose.Document<unknown, {}, IUser, {}> & IUser & Required<{
+export declare const userModel: mongoose.Model<IUser, {}, {}, {}, mongoose.Document<unknown, {}, IUser, {}, {}> & IUser & Required<{
     _id: mongoose.Types.ObjectId;
 }> & {
     __v: number;
