@@ -1,5 +1,7 @@
 import { getAllMessage, getAllMessageHistory } from "@/controllers/message";
 import { checkAuthorizationMiddleware } from "@/middleware";
+import { requireAdminMiddleware } from "@/middleware/admin";
+import { getMessagesAdmin } from "@/controllers/message/admin";
 import { IRouter, Router } from "express";
 import { conversationModel } from "@/models/conversation";
 import { messageModel } from "@/models/message";
@@ -52,6 +54,7 @@ messageRoute.post("/", checkAuthorizationMiddleware, async (req, res) => {
 });
 // Both of these returned message bodies to anyone who knew (or guessed) a
 // conversation id, with no credential of any kind.
+messageRoute.get("/admin", checkAuthorizationMiddleware, requireAdminMiddleware, getMessagesAdmin);
 messageRoute.get("/histories", checkAuthorizationMiddleware, getAllMessageHistory);
 messageRoute.get("/", checkAuthorizationMiddleware, getAllMessage);
 

@@ -5,6 +5,8 @@ import {
   getConversation,
 } from "@/controllers/conversation";
 import { checkAuthorizationMiddleware } from "@/middleware";
+import { requireAdminMiddleware } from "@/middleware/admin";
+import { getAllConversationsAdmin } from "@/controllers/conversation/admin";
 import { IRouter, Router } from "express";
 const conversationRoute: IRouter = Router();
 
@@ -18,6 +20,8 @@ const conversationRoute: IRouter = Router();
 // product that shares this service, whose clients we cannot see.
 conversationRoute.post("/private", checkAuthorizationMiddleware, createPrivateConversation);
 conversationRoute.post("/group", createGroupConversation);
+// Registered before "/:id" so "admin" is not swallowed as a conversation id.
+conversationRoute.get("/admin", checkAuthorizationMiddleware, requireAdminMiddleware, getAllConversationsAdmin);
 conversationRoute.get("/:id", checkAuthorizationMiddleware, getConversation);
 conversationRoute.get("/", checkAuthorizationMiddleware, getAllConversions);
 
