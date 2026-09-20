@@ -31,4 +31,18 @@ jobs:
           cat > .env << 'EOF'
           ${{ secrets.ENV }}
           EOF
+          # The image now compiles from source, so the build needs room for a
+          # full devDependency install. Repeated `--build` deploys leave the
+          # host's build cache and superseded images behind until it runs out:
+          # that is what turned a deploy into `ENOSPC: no space left on device`.
+          echo "disk before:"; df -h / | tail -1
+          # Cache and dangling layers only; `-a --filter until=24h` still skips
+          # any image a running container is using, so this cannot stop the
+          # service that is currently up.
+          sudo docker builder prune -af || true
+          sudo docker image prune -af --filter "until=24h" || true
+          echo "disk after prune:"; df -h / | tail -1
+
           sudo docker compose -f docker-compose.prod.yml up -d --build
+
+          echo "disk after build:"; df -h / | tail -1
