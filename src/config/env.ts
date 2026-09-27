@@ -15,6 +15,10 @@ const envSchema = z.object({
 
   // Socket Configuration
   SOCKET_CORS_ORIGIN: z.string().default("http://localhost:5173"),
+
+  // Shared with seemuehub-backend. When set, /core-socket/* only accepts
+  // requests carrying it as X-Internal-Key.
+  CHAT_INTERNAL_KEY: z.string().optional(),
 });
 
 export const env = envSchema.parse(process.env);

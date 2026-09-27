@@ -226,14 +226,26 @@ const subscribeToClient = async (io: Server): Promise<void> => {
     sub.subscribe("PAYMENT", async (message: string) => {
       try {
         const data: any = JSON.parse(message);
-        console.log("data===>", data);
-        const dataResponse = {
-          type: "PAYMENT",
-          response: data,
-        };
 
-        console.log("dataResponse===>", dataResponse);
-        io.emit("LISTENING", dataResponse);
+        // A payment used to be broadcast to every connected socket - amount,
+        // payer and payment id to everyone signed in. It goes to the payer's
+        // room now (sockets join their userId on SETUP).
+        if (data?.type === "DONATE") {
+          // Anonymous donors have no room of their own; their page matches
+          // on referenceId. Only what it needs is broadcast.
+          io.emit("LISTENING", {
+            type: "PAYMENT",
+            response: { type: data.type, referenceId: data.referenceId, status: data.status },
+          });
+          return;
+        }
+
+        const userId = data?.userId ? String(data.userId) : "";
+        if (!userId) {
+          console.warn("PAYMENT without a userId was not delivered", { id: data?._id });
+          return;
+        }
+        io.to(userId).emit("LISTENING", { type: "PAYMENT", response: data });
       } catch (error) {
         console.log("error core socket", error);
       }
