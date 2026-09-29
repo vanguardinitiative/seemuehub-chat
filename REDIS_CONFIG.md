@@ -25,6 +25,10 @@ CORS_ORIGIN=http://localhost:5173
 
 # Socket Configuration
 SOCKET_CORS_ORIGIN=http://localhost:5173
+
+# Auth (see README.md)
+JWT_SECRET_KEY=
+SOCKET_AUTH_MODE=permissive
 ```
 
 ## Configuration Features
@@ -57,6 +61,8 @@ The chat service uses the following Redis channels:
 - `SEND_MESSAGE` - Message broadcasting
 - `READ_MESSAGE` - Message read status
 - `USER_OFFLINE` - User disconnection
+- `PAYMENT` - Payment results from the backend
+- `ORDER` - Order updates from the backend
 
 ## Usage
 
