@@ -60,3 +60,14 @@ export const isParticipant = async (conversationId: string, userId: string): Pro
       .select("_id")
       .lean()
   );
+
+/**
+ * Everyone who shares a conversation with `userId`, not counting `userId`:
+ * the audience for that user's online/offline presence. One `distinct` at
+ * SETUP, found through the `participants.user` index; the result is kept on
+ * the socket for the disconnect.
+ */
+export const conversationPartners = async (userId: string): Promise<string[]> => {
+  const ids = await conversationModel.distinct("participants.user", participantOf(userId));
+  return ids.map((id) => String(id)).filter((id) => id !== userId);
+};

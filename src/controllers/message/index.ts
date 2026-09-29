@@ -112,7 +112,12 @@ const sendPrivateMessage = async (socket: Socket, io: Server, data: MessageData)
   } catch (error) {
     await session.abortTransaction();
     console.error("Error sending message:", error instanceof Error ? error.message : "Unknown error");
-    socket.emit("ERROR", { message: error instanceof Error ? error.message : "Unknown error" });
+    socket.emit("ERROR", {
+      code: "MESSAGE_SEND_FAILED",
+      message: error instanceof Error ? error.message : "Unknown error",
+      event: "NEW_MESSAGE",
+      _id: data?._id ?? null,
+    });
   } finally {
     session.endSession();
   }
@@ -190,7 +195,12 @@ const sendGroupMessage = async (socket: Socket, io: Server, data: MessageData): 
   } catch (error) {
     await session.abortTransaction();
     console.error("Error sending message:", error instanceof Error ? error.message : "Unknown error");
-    socket.emit("ERROR", { message: error instanceof Error ? error.message : "Unknown error" });
+    socket.emit("ERROR", {
+      code: "MESSAGE_SEND_FAILED",
+      message: error instanceof Error ? error.message : "Unknown error",
+      event: "NEW_GROUP_MESSAGE",
+      _id: data?._id ?? null,
+    });
   } finally {
     session.endSession();
   }

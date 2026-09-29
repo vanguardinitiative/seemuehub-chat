@@ -5,6 +5,7 @@ import { IConversation } from "@/models/conversation";
 import { IMessage } from "@/models/message";
 import { userModel } from "@/models/user";
 import { env } from "./env";
+import { deliverPayment, emitPresence, joinSetupRooms, routePayment } from "@/socket/rooms";
 
 // Redis configuration matching seemuehub-backend style
 const redisConfig = {
@@ -101,27 +102,16 @@ const subscribeToClient = async (io: Server): Promise<void> => {
   try {
     sub.subscribe("SETUP", async (message: string) => {
       try {
+        // Published by the SETUP handler (src/socket/handlers.ts), which has
+        // already put the verified user in `userId` and checked membership of
+        // `conversationId`.
         const data: DataType = JSON.parse(message);
-        console.log("data===>", data);
-        const { userId, socketId, conversationId } = data;
-        const socket = io.sockets.sockets.get(socketId);
-        if (socket) {
-          socket.join(userId);
-          if (conversationId) {
-            socket.join(conversationId);
-          }
-        }
-        console.log("userId", userId);
+        const { userId, socketId, partners } = data;
+        if (!userId) return;
+        if (joinSetupRooms(io, data) === "refused") return;
 
         await userModel.findByIdAndUpdate({ _id: userId }, { isOnline: true, socketId }, { new: true });
-        const dataResponse = {
-          type: "USER_ONLINE",
-          response: {
-            userId,
-            isOnline: true,
-          },
-        };
-        io.emit("CONVERSATION_LISTENING", dataResponse);
+        emitPresence(io, partners, { userId, isOnline: true });
       } catch (error) {
         console.log("error setup ", error);
       }
@@ -199,25 +189,20 @@ const subscribeToClient = async (io: Server): Promise<void> => {
 
     interface UserOfflineMessage {
       socketId: string;
+      userId?: string;
+      partners?: string[];
     }
 
     sub.subscribe("USER_OFFLINE", async (message: string) => {
       try {
-        const { socketId } = JSON.parse(message) as UserOfflineMessage;
+        const { socketId, partners } = JSON.parse(message) as UserOfflineMessage;
 
+        // No match when another socket of the same user has set up since:
+        // that one is the user's socketId now, and the user is still online.
         const user = await userModel.findOneAndUpdate({ socketId }, { isOnline: false, socketId: null }, { new: true });
+        if (!user) return;
 
-        if (!user) {
-          throw new Error(`User not found with socketId: ${socketId}`);
-        }
-        const dataResponse = {
-          type: "USER_ONLINE",
-          response: {
-            userId: user._id,
-            isOnline: false,
-          },
-        };
-        io.emit("CONVERSATION_LISTENING", dataResponse);
+        emitPresence(io, partners, { userId: user._id, isOnline: false });
       } catch (error) {
         console.error(`Error in USER_OFFLINE handler:`, error instanceof Error ? error.message : "Unknown error");
       }
@@ -227,25 +212,15 @@ const subscribeToClient = async (io: Server): Promise<void> => {
       try {
         const data: any = JSON.parse(message);
 
-        // A payment used to be broadcast to every connected socket - amount,
-        // payer and payment id to everyone signed in. It goes to the payer's
-        // room now (sockets join their userId on SETUP).
-        if (data?.type === "DONATE") {
-          // Anonymous donors have no room of their own; their page matches
-          // on referenceId. Only what it needs is broadcast.
-          io.emit("LISTENING", {
-            type: "PAYMENT",
-            response: { type: data.type, referenceId: data.referenceId, status: data.status },
-          });
+        // A payment goes to its payer's room (sockets join their userId on
+        // SETUP). Anonymous donations are the one broadcast left, and only
+        // in permissive mode: see routePayment in src/socket/rooms.ts.
+        const deliveries = routePayment(data, env.SOCKET_AUTH_MODE);
+        if (deliveries.length === 0) {
+          console.warn("PAYMENT without a userId was not delivered", { id: data?._id, type: data?.type });
           return;
         }
-
-        const userId = data?.userId ? String(data.userId) : "";
-        if (!userId) {
-          console.warn("PAYMENT without a userId was not delivered", { id: data?._id });
-          return;
-        }
-        io.to(userId).emit("LISTENING", { type: "PAYMENT", response: data });
+        deliverPayment(io, deliveries);
       } catch (error) {
         console.log("error core socket", error);
       }
