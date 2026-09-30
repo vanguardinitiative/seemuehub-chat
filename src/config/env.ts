@@ -16,9 +16,19 @@ const envSchema = z.object({
   // Socket Configuration
   SOCKET_CORS_ORIGIN: z.string().default("http://localhost:5173"),
 
-  // Shared with seemuehub-backend. When set, /core-socket/* only accepts
-  // requests carrying it as X-Internal-Key.
+  // Shared with seemuehub-backend, both ways. When set, the backend-only
+  // routes (/orders, /core-socket/*) require it as X-Internal-Key, and it is
+  // sent as X-Internal-Key on the push requests to BACKEND_URL.
   CHAT_INTERNAL_KEY: z.string().optional(),
+
+  // seemuehub-backend's origin, e.g. https://api.seemuehub.com (no /api/v1).
+  // With CHAT_INTERNAL_KEY, a stored private message is pushed to its other
+  // participants through POST {BACKEND_URL}/api/v1/internal/push/chat
+  // (src/services/chat-push.ts). Unset: no pushes.
+  BACKEND_URL: z.preprocess(
+    (value) => (typeof value === "string" && value.trim() !== "" ? value.trim() : undefined),
+    z.string().url().optional()
+  ),
 
   // What a socket that connects without `auth: { token }` may do (see
   // src/socket/auth.ts and the README). "permissive" keeps the old behaviour

@@ -29,7 +29,7 @@ The tests need neither Mongo nor Redis.
 | `JWT_SECRET_KEY` | yes | The backend's `JWT_SECRET`; verifies access tokens for REST and sockets |
 | `CHAT_INTERNAL_KEY` | recommended | Shared with seemuehub-backend. When set, the backend-only routes (`POST /orders`, `POST /core-socket/payment`) require it as `X-Internal-Key`; see [Internal routes](#internal-routes-and-chat_internal_key) |
 | `SOCKET_AUTH_MODE` | no (`permissive`) | `permissive` or `enforce`; see below. Any other value stops the service at boot |
-| `NOTIFICATION_URL` | no | Push notification endpoint for group messages |
+| `BACKEND_URL` | no | seemuehub-backend's origin (`https://api.seemuehub.com`, no `/api/v1`). With `CHAT_INTERNAL_KEY`, new private messages are pushed through it; see [Push notifications](#push-notifications). Not a URL: the service stops at boot |
 
 In production these come from the `ENV` repository secret, which the deploy
 writes to `.env` for `docker-compose.prod.yml` (`env_file: .env`). A changed
@@ -188,3 +188,33 @@ Rolling back is removing the key here (step 4).
 `PUT /message-status/read?conversationId=` marks a conversation read for the
 caller, and only for a participant: anyone else gets the same 404 as a
 conversation that does not exist.
+
+## Push notifications
+
+When a private message is stored (`NEW_MESSAGE`), this service asks
+seemuehub-backend, which holds the device tokens, to push it to the other
+participants:
+
+```http
+POST {BACKEND_URL}/api/v1/internal/push/chat
+X-Internal-Key: {CHAT_INTERNAL_KEY}
+
+{ "conversationId", "senderId", "recipientIds": [1..50], "messageType", "snippet"? }
+```
+
+- Never to the sender, nor to a participant who muted the conversation.
+- `snippet` is a `TEXT` message's text, whitespace folded, at most 140
+  characters; other types send none.
+- Not for order or system messages: the backend notifies its own order events.
+- Fire and forget, after the message is committed, with a 3 s timeout: a slow
+  or failing backend never delays or fails a message. Failures log
+  `{"msg":"chat_push_failed","conversationId",...}` (ids and status only).
+- Skipped silently until both `BACKEND_URL` and `CHAT_INTERNAL_KEY` are set.
+
+Group messages are not pushed. They used to post a `"platform": "TAXI"` payload
+to `NOTIFICATION_URL`, a leftover of the product this service was forked from;
+that call is gone and `NOTIFICATION_URL` is no longer read.
+
+To turn pushes on: deploy the backend endpoint (seemuehub-backend#33), set the
+same `CHAT_INTERNAL_KEY` on both services (see the rollout above), then add
+`BACKEND_URL` to this service's `ENV` and redeploy.
