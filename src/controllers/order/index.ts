@@ -46,6 +46,11 @@ const handleOrderStatusUpdate = async (orderData: {
       case "COMPLETED":
         messageContent = "Order ສຳເລັດເເລ້ວ";
         break;
+      // The buyer or the seller cancelled the unpaid order; nothing more can be
+      // done to it, but the conversation stays open.
+      case "CANCELLED":
+        messageContent = "Order ຖືກຍົກເລີກແລ້ວ";
+        break;
     }
 
     // Create automatic message
