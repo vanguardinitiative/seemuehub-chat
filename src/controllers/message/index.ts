@@ -4,7 +4,8 @@ import { conversationModel, IParticipant } from "@/models/conversation";
 import type { Request, Response } from "express";
 import { messageModel, MessageType } from "@/models/message";
 import { pub } from "@/config/redis";
-import { createOrGetConversation, messageNotification } from "./helper";
+import { createMessageStatuses, createOrGetConversation } from "./helper";
+import { pushChatMessage } from "@/services/chat-push";
 import { messages } from "@/config";
 import { messageStatusModel } from "@/models/messageStatus";
 import { isParticipant, participantOf, userIdOf } from "@/utils/conversation-access";
@@ -94,9 +95,6 @@ const sendPrivateMessage = async (socket: Socket, io: Server, data: MessageData)
       })
     );
 
-    // if (conversationData) {
-    //   messageNotification(conversationData, messageData);
-    // }
 
     // if (data.messageType !== MessageType.IMAGE) {
     //   pub.publish(
@@ -109,6 +107,11 @@ const sendPrivateMessage = async (socket: Socket, io: Server, data: MessageData)
     // }
 
     await session.commitTransaction();
+
+    // After the commit, and not awaited: a push to the other participants'
+    // phones through the backend, which can neither delay nor fail the
+    // message (src/services/chat-push.ts). Never to the sender.
+    void pushChatMessage(conversationData, messageData);
   } catch (error) {
     await session.abortTransaction();
     console.error("Error sending message:", error instanceof Error ? error.message : "Unknown error");
@@ -177,8 +180,14 @@ const sendGroupMessage = async (socket: Socket, io: Server, data: MessageData): 
         messageData,
       })
     );
+    // Read receipts only. This also posted a "TAXI" push payload to
+    // NOTIFICATION_URL - a leftover of the product this service was forked
+    // from, which sent Seemuehub message text and sender details to whatever
+    // that URL pointed at (or failed against "localhost" when unset). No
+    // Seemuehub client sends group messages; pushes for private ones go
+    // through the backend (pushChatMessage above).
     if (conversationData) {
-      messageNotification(conversationData, messageData);
+      createMessageStatuses(conversationData, messageData);
     }
 
     // if (data.messageType !== MessageType.IMAGE) {
