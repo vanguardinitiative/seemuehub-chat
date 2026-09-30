@@ -5,6 +5,7 @@ import { IConversation } from "@/models/conversation";
 import { IMessage } from "@/models/message";
 import { userModel } from "@/models/user";
 import { env } from "./env";
+import { describeRedisConfig } from "./redis-log";
 import { deliverPayment, emitPresence, joinSetupRooms, routePayment } from "@/socket/rooms";
 
 // Redis configuration matching seemuehub-backend style
@@ -18,7 +19,8 @@ const redisConfig = {
   database: 0,
 };
 
-console.log("Redis configuration:", redisConfig);
+// Host and port only: never the password (config/redis-log.ts).
+console.log("Redis configuration:", describeRedisConfig(redisConfig));
 
 // Create Redis clients
 const pub: RedisClientType = createClient(redisConfig);

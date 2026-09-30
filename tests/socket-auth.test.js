@@ -391,6 +391,70 @@ test("NEW_GROUP_MESSAGE from a verified socket", async (t) => {
   await server.close();
 });
 
+test("server-only message types are refused over the socket", async (t) => {
+  const me = oid();
+  const server = await startServer("permissive");
+  const client = await connected(server.client({ token: tokenFor(me) }));
+  const conversationId = oid();
+  server.members.set(conversationId, new Set([me]));
+
+  // SYSTEM and ORDER_* render as the service's own events ("payment received",
+  // "order completed"); a client could post them into any conversation it is in.
+  for (const messageType of ["SYSTEM", "ORDER_UPDATE", "ORDER_STATUS_CHANGE", "ORDER_PAYMENT", "ORDER_DELIVERY"]) {
+    await t.test(`NEW_MESSAGE ${messageType}: ERROR INVALID_PAYLOAD, nothing stored`, async () => {
+      server.calls.private.length = 0;
+      const _id = oid();
+      const error = nextEvent(client, "ERROR");
+      client.emit("NEW_MESSAGE", textMessage({ receiverId: oid(), messageType, _id }));
+      const payload = await error;
+      assert.deepStrictEqual(
+        { code: payload.code, event: payload.event, field: payload.field, _id: payload._id },
+        { code: "INVALID_PAYLOAD", event: "NEW_MESSAGE", field: "messageType", _id }
+      );
+      await settle();
+      assert.strictEqual(server.calls.private.length, 0);
+      assert.strictEqual(logged("message_refused", { field: "messageType", messageType, userId: me }).length, 1);
+    });
+  }
+
+  await t.test("NEW_GROUP_MESSAGE SYSTEM into the sender's own conversation: refused too", async () => {
+    const error = nextEvent(client, "ERROR");
+    client.emit("NEW_GROUP_MESSAGE", textMessage({ conversationId, messageType: "SYSTEM" }));
+    assert.strictEqual((await error).code, "INVALID_PAYLOAD");
+    await settle();
+    assert.strictEqual(server.calls.group.length, 0);
+  });
+
+  await t.test("a missing or non-string messageType is refused", async () => {
+    for (const messageType of [undefined, 42, ""]) {
+      const error = nextEvent(client, "ERROR");
+      client.emit("NEW_MESSAGE", { content: "hi", receiverId: oid(), messageType });
+      assert.strictEqual((await error).code, "INVALID_PAYLOAD");
+    }
+    await settle();
+    assert.strictEqual(server.calls.private.length, 0);
+  });
+
+  await t.test("a legacy socket is held to the same rule", async () => {
+    const legacy = await connected(server.client(undefined));
+    const error = nextEvent(legacy, "ERROR");
+    legacy.emit("NEW_MESSAGE", textMessage({ senderId: oid(), receiverId: oid(), messageType: "ORDER_PAYMENT" }));
+    assert.strictEqual((await error).code, "INVALID_PAYLOAD");
+    await settle();
+    assert.strictEqual(server.calls.private.length, 0);
+  });
+
+  await t.test("the client types still go through", async () => {
+    server.calls.private.length = 0;
+    const types = ["TEXT", "IMAGE", "VIDEO", "VOICE", "FILE", "STICKER", "LOCATION"];
+    for (const messageType of types) client.emit("NEW_MESSAGE", textMessage({ receiverId: oid(), messageType }));
+    await until(() => server.calls.private.length === types.length);
+    assert.deepStrictEqual(server.calls.private.map((m) => m.messageType).sort(), [...types].sort());
+  });
+
+  await server.close();
+});
+
 test("a verified socket whose token expires mid-connection", async (t) => {
   const me = oid();
   const server = await startServer("permissive");

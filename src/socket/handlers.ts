@@ -1,6 +1,7 @@
 import type { Server, Socket } from "socket.io";
 import { Types } from "mongoose";
 import { actorFor, dataOf, logEvent, logLegacyConnection, refuse, socketAuthMiddleware, type SocketAuthMode } from "./auth";
+import { isClientMessageType } from "@/utils/message-type";
 
 /**
  * The client-facing socket events. Everything that touches Redis or Mongo
@@ -173,6 +174,25 @@ const handleMessage = async (
 
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     refuse(socket, event, "INVALID_PAYLOAD");
+    return;
+  }
+
+  // SYSTEM and ORDER_* are the service's own messages (see
+  // utils/message-type.ts). Checked for legacy sockets too: the type is
+  // stored as sent, whoever sends it.
+  const messageType = (raw as Record<string, unknown>).messageType;
+  if (!isClientMessageType(messageType)) {
+    const _id = (raw as Record<string, unknown>)._id ?? null;
+    logEvent({
+      msg: "message_refused",
+      event,
+      code: "INVALID_PAYLOAD",
+      field: "messageType",
+      messageType: typeof messageType === "string" ? messageType.slice(0, 40) : null,
+      socketId: socket.id,
+      userId: actor.kind === "verified" ? actor.userId : null,
+    });
+    refuse(socket, event, "INVALID_PAYLOAD", { field: "messageType", _id });
     return;
   }
 

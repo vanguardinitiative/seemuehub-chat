@@ -4,22 +4,36 @@ import { Request, Response } from "express";
 import { messages } from "@/config";
 import { conversationModel, UserType } from "@/models/conversation";
 import { pub } from "@/config/redis";
+import mongoose from "mongoose";
+import { participantOf, userIdOf } from "@/utils/conversation-access";
 
 const updateReadStatus = async (req: Request, res: Response): Promise<void> => {
   try {
-    console.log("user data", (req as any).user);
-    const { conversationId } = req.query;
-
     // Input validation
-    if (!conversationId) {
+    if (!req.query.conversationId) {
       res.status(400).json(messages.BAD_REQUEST);
       return;
     }
-    const receiverId = (req as any).user.userId;
+    const conversationId = String(req.query.conversationId);
+    const receiverId = userIdOf(req);
+    if (!receiverId) {
+      res.status(401).json(messages.UNAUTHORIZED);
+      return;
+    }
+    if (!mongoose.Types.ObjectId.isValid(conversationId)) {
+      res.status(400).json(messages.INVALID_CONVERSATION_ID);
+      return;
+    }
     //step1: ເອົາຂໍ້ມູນຂອງ conversation
-    const conversation = await conversationModel.findById(conversationId);
+    //
+    // Only a participant. Any signed-in caller could mark any conversation read
+    // - every message's readAllAt, every participant's statuses - and trigger
+    // READ_MESSAGE to its participants. Folded into the query, so "not yours"
+    // and "does not exist" are the same 404 (utils/conversation-access.ts).
+    const conversation = await conversationModel.findOne({ _id: conversationId, ...participantOf(receiverId) });
     if (!conversation) {
-      res.status(404).json(messages.NOT_FOUND);
+      console.warn("[access] read status refused", { conversationId, userId: receiverId });
+      res.status(404).json(messages.CONVERSATION_NOT_FOUND);
       return;
     }
     console.log("conversation", conversation.latestMessageData.senderId);

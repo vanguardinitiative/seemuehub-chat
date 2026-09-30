@@ -27,7 +27,7 @@ The tests need neither Mongo nor Redis.
 | `MONGODB_URI` | yes | Shared database with seemuehub-backend |
 | `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD` | yes | Pub/sub between instances |
 | `JWT_SECRET_KEY` | yes | The backend's `JWT_SECRET`; verifies access tokens for REST and sockets |
-| `CHAT_INTERNAL_KEY` | recommended | When set, `/core-socket/*` requires it as `X-Internal-Key` |
+| `CHAT_INTERNAL_KEY` | recommended | Shared with seemuehub-backend. When set, the backend-only routes (`POST /orders`, `POST /core-socket/payment`) require it as `X-Internal-Key`; see [Internal routes](#internal-routes-and-chat_internal_key) |
 | `SOCKET_AUTH_MODE` | no (`permissive`) | `permissive` or `enforce`; see below. Any other value stops the service at boot |
 | `NOTIFICATION_URL` | no | Push notification endpoint for group messages |
 
@@ -70,6 +70,14 @@ A socket that sends no token at all is a **legacy** socket (see
 | `NEW_MESSAGE` | `{ _id?, conversationId?, receiverId, messageType, content, attachments?, ... }` | `senderId` is the caller whatever the payload says. With `conversationId` the caller must be a participant; without it, the private conversation between caller and `receiverId` is found or created. |
 | `NEW_GROUP_MESSAGE` | `{ _id?, conversationId, messageType, content, ... }` | The caller must already be a participant. |
 
+`messageType` must be one a client may send: `TEXT`, `IMAGE`, `VIDEO`,
+`VOICE`, `FILE`, `REACTION`, `STICKER`, `LOCATION`, `VOICE_CALL`,
+`VIDEO_CALL`. `SYSTEM` and the `ORDER_*` types are the service's own (they
+render as order events) and are refused with `ERROR` `INVALID_PAYLOAD`,
+`field: "messageType"`, from verified and legacy sockets alike. The REST sends
+(`POST /messages`, `POST /organizations/conversations/:id/messages`) store
+`TEXT` and answer 400 to a server-only type.
+
 Fields a client cannot set on a message: `sender`, `actorUserId`,
 `sendAsOrganizationId`, `isOrderMessage`, `orderId`, `orderStatus`,
 `orderAction`, `isDeleted`, `deletedAt`, `deletedBy`, `deliveredAllAt`,
@@ -94,7 +102,7 @@ Fields a client cannot set on a message: `sender`, `actorUserId`,
 | `AUTH_REQUIRED` | Legacy socket in `enforce` mode: reconnect with `auth: { token }` |
 | `TOKEN_EXPIRED` | The connection's token has expired since it connected: refresh, reconnect, retry |
 | `NOT_PARTICIPANT` | Not a participant of `conversationId`; nothing was stored or joined |
-| `INVALID_PAYLOAD` | The payload was not an object |
+| `INVALID_PAYLOAD` | The payload was not an object, or (`field: "messageType"`) its `messageType` is missing or not one a client may send; `_id` echoes the client's id |
 | `MESSAGE_SEND_FAILED` | Storing the message failed (`message` says why); `_id` echoes the client's id |
 
 ### `SOCKET_AUTH_MODE`
@@ -145,4 +153,38 @@ key from the backend (see the PR that introduced this).
 Other log lines: `socket_auth_refused` (a bad token at the handshake, with its
 code), `setup_user_mismatch` (an authenticated SETUP named another userId),
 `sender_override` (an authenticated message named another senderId),
-`message_refused` (NOT_PARTICIPANT).
+`message_refused` (NOT_PARTICIPANT, or INVALID_PAYLOAD with
+`field: "messageType"`).
+
+## Internal routes and `CHAT_INTERNAL_KEY`
+
+Two routes are for seemuehub-backend only:
+
+| Route | Sent by the backend when | What it does here |
+| --- | --- | --- |
+| `POST /orders` | an order moves a step (`conversation.service` `updateOrderStep`) | stores a message in the order's conversation as the order's sender, and emits `ORDER` to its participants |
+| `POST /core-socket/payment` | IB Bank confirms a payment | emits `PAYMENT` to the payer |
+
+Both require the shared `CHAT_INTERNAL_KEY` as `X-Internal-Key`
+(`src/middleware/internal-key.ts`, compared timing-safe). A missing or wrong
+key is a 401 and logs `{"msg":"internal_key_refused",...}`. While the key is
+**not set here**, both stay open as they always were and every call logs
+`{"msg":"internal_key_unset",...}`: that is what lets this deploy before the
+backend sends the header.
+
+Rollout:
+
+1. Deploy the backend change that sends `X-Internal-Key` on every call to this
+   service (seemuehub-backend#37). With no key configured it sends nothing.
+2. Deploy this. Nothing changes yet; `internal_key_unset` lines show the calls.
+3. Put a long random `CHAT_INTERNAL_KEY` in the **backend's** `ENV` secret and
+   redeploy it. (Before this step, setting the key here would refuse the
+   backend.)
+4. Put the same value in **this service's** `ENV` secret and re-run the latest
+   deploy. From now on both routes are closed to everyone but the backend.
+
+Rolling back is removing the key here (step 4).
+
+`PUT /message-status/read?conversationId=` marks a conversation read for the
+caller, and only for a participant: anyone else gets the same 404 as a
+conversation that does not exist.
