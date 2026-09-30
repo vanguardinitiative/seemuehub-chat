@@ -31,6 +31,19 @@ jobs:
           cat > .env << 'EOF'
           ${{ secrets.ENV }}
           EOF
+          # Values that are not in ENV, each from its own repository secret or
+          # variable, so adding one never means retyping the whole ENV blob.
+          # Unset ones add nothing. A later line wins in docker's env_file.
+          #   CHAT_INTERNAL_KEY (secret): shared with the backend's ENV; guards
+          #     the backend-only routes and signs chat push requests.
+          #   BACKEND_URL (variable): the backend origin, no /api/v1.
+          if [ -n "${{ secrets.CHAT_INTERNAL_KEY }}" ]; then
+            printf 'CHAT_INTERNAL_KEY=%s\n' '${{ secrets.CHAT_INTERNAL_KEY }}' >> .env
+          fi
+          if [ -n "${{ vars.BACKEND_URL }}" ]; then
+            printf 'BACKEND_URL=%s\n' '${{ vars.BACKEND_URL }}' >> .env
+          fi
+          echo "extra env: $(grep -cE '^(CHAT_INTERNAL_KEY|BACKEND_URL)=' .env) line(s)"
           # The image now compiles from source, so the build needs room for a
           # full devDependency install. Repeated `--build` deploys leave the
           # host's build cache and superseded images behind until it runs out:
