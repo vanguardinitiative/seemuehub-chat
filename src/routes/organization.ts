@@ -3,6 +3,8 @@ import mongoose, { Schema } from "mongoose";
 import { checkAuthorizationMiddleware } from "@/middleware";
 import { conversationModel } from "@/models/conversation";
 import { messageModel } from "@/models/message";
+import { messages } from "@/config";
+import { isClientMessageType } from "@/utils/message-type";
 
 const router = Router();
 const memberSchema = new Schema({ organizationId: Schema.Types.ObjectId, userId: Schema.Types.ObjectId, role: String, status: String }, { collection: "organizationmembers" });
@@ -30,6 +32,8 @@ router.post("/:id/conversations", async (req: Request, res: Response) => {
 });
 router.post("/conversations/:conversationId/messages", async (req: Request, res: Response) => {
   try {
+    // Stored as TEXT; a server-only type (SYSTEM, ORDER_*) is refused, not downgraded.
+    if (req.body?.messageType !== undefined && !isClientMessageType(req.body.messageType)) return void res.status(400).json(messages.INVALID_MESSAGE_TYPE);
     const actor = uid(req), conversation: any = await conversationModel.findById(req.params.conversationId); if (!conversation) return void res.status(404).json({ success: false, errors: { code: "CONVERSATION_NOT_FOUND" } });
     if (!conversation.organizationId || !(await requireMember(String(conversation.organizationId), actor))) return void res.status(403).json({ success: false, errors: { code: "ORGANIZATION_MEMBERSHIP_REQUIRED" } });
     const item = await messageModel.create({ sender: actor, actorUserId: actor, sendAsOrganizationId: conversation.organizationId, conversation: conversation._id, content: req.body.body ?? req.body.content, messageType: "TEXT" });

@@ -6,6 +6,8 @@ import { IRouter, Router } from "express";
 import { conversationModel } from "@/models/conversation";
 import { messageModel } from "@/models/message";
 import mongoose, { Schema } from "mongoose";
+import { isClientMessageType } from "@/utils/message-type";
+import { messages } from "@/config";
 const messageRoute: IRouter = Router();
 
 const orgMemberSchema = new Schema(
@@ -17,7 +19,11 @@ const OrgMember = mongoose.models.OrganizationMember ?? mongoose.model("Organiza
 messageRoute.post("/", checkAuthorizationMiddleware, async (req, res) => {
   try {
     const actorUserId = String((req as any).user?.userId ?? (req as any).user?.id);
-    const { conversationId, body, content, sendAsOrganizationId } = req.body;
+    const { conversationId, body, content, sendAsOrganizationId, messageType } = req.body;
+    // Stored as TEXT whatever is sent, but a request for a server-only type
+    // (SYSTEM, ORDER_*) is refused rather than quietly downgraded.
+    if (messageType !== undefined && !isClientMessageType(messageType))
+      return void res.status(400).json(messages.INVALID_MESSAGE_TYPE);
     const conversation: any = await conversationModel.findById(conversationId);
     if (!conversation) return void res.status(404).json({ success: false, errors: { code: "CONVERSATION_NOT_FOUND" } });
     if (sendAsOrganizationId) {
