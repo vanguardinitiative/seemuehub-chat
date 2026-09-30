@@ -1,6 +1,6 @@
 import { messages } from "@/config";
 import { Request, Response, NextFunction } from "express";
-import jwt from "jsonwebtoken";
+import { AccessTokenError, verifyAccessToken } from "@/utils/access-token";
 
 export interface TokenData {
   id: string;
@@ -9,32 +9,40 @@ export interface TokenData {
   role: string;
 }
 
+/**
+ * Puts the verified token payload on `req.user`. Handlers read the caller
+ * through `userIdOf(req)`, i.e. the `userId` claim.
+ *
+ * Verification is `verifyAccessToken`, shared with the socket handshake. Beyond
+ * what this middleware used to check, that also refuses the backend's refresh
+ * token (`type: "refresh"`, 5 days) and a token without a usable `userId`;
+ * neither is anything a client should be sending here.
+ */
 export const checkAuthorizationMiddleware = async (req: Request, res: Response, next: NextFunction) => {
+  const header = req.headers["authorization"];
+  if (!header) {
+    res.status(401).json({
+      code: messages.UNAUTHORIZED.code,
+      message: messages.UNAUTHORIZED.message,
+      detail: "Invalid signature",
+    });
+    return;
+  }
+
   try {
-    const token = req.headers["authorization"];
-    if (token) {
-      const accessToken: string = token.replace("Bearer ", "");
-      const payloadData = jwt.verify(accessToken, process.env.JWT_SECRET_KEY as any);
-      (req as any).user = payloadData;
-    } else {
-      res.status(401).json({
-        code: messages.UNAUTHORIZED.code,
-        message: messages.UNAUTHORIZED.message,
-        detail: "Invalid signature",
-      });
-      return;
-    }
-    next();
+    (req as any).user = verifyAccessToken(header).payload;
   } catch (error) {
-    console.log("error: ", error);
-    console.log("error.name: ", (error as Error).name);
-    if ((error as Error).name === "TokenExpiredError") {
+    const code = error instanceof AccessTokenError ? error.code : "TOKEN_INVALID";
+    if (code === "TOKEN_EXPIRED") {
       res.status(401).json({ code: messages.TOKEN_EXPIRED.code, message: messages.TOKEN_EXPIRED.message });
       return;
     }
+    console.warn("[auth] token refused", { code, path: req.path });
     res
       .status(401)
       .json({ code: messages.UNAUTHORIZED.code, message: messages.UNAUTHORIZED.message, detail: "Invalid signature" });
     return;
   }
+
+  next();
 };
