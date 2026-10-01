@@ -1,6 +1,8 @@
 node_modules/
 .env*
 .env
+# The template, which holds no values.
+!.env.example
 package-lock.json
 pnpm-lock.yaml
 

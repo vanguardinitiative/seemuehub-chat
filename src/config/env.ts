@@ -38,6 +38,22 @@ const envSchema = z.object({
     (value) => (typeof value === "string" && value.trim() !== "" ? value.trim().toLowerCase() : undefined),
     z.enum(["permissive", "enforce"]).default("permissive")
   ),
+
+  // Where sticker images live. A STICKER message's one attachment must point
+  // under it (src/utils/sticker.ts); the backend only accepts sticker URLs
+  // under the same bucket's public images/ prefix. The default is production's
+  // bucket, so it only needs setting if the bucket moves. It must end in "/":
+  // without it, "https://bucket.example.com" would also let through
+  // "https://bucket.example.com.evil.net/...". A bad value stops the service
+  // at boot rather than refusing every sticker.
+  STICKER_URL_PREFIX: z.preprocess(
+    (value) => (typeof value === "string" && value.trim() !== "" ? value.trim() : undefined),
+    z
+      .string()
+      .url()
+      .refine((value) => value.startsWith("https://") && value.endsWith("/"), "STICKER_URL_PREFIX must be an https URL ending in /")
+      .default("https://seemuehub-storage.s3.ap-southeast-1.amazonaws.com/images/")
+  ),
 });
 
 export const env = envSchema.parse(process.env);

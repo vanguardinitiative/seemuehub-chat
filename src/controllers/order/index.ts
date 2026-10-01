@@ -44,6 +44,7 @@ const handleOrderStatusUpdate = async (orderData: {
         latestMessageData: {
           senderId: orderSender,
           messageId: orderMessage._id.toString(),
+          messageType: orderMessage.messageType,
           content: messageContent,
           readAllAt: null,
           sendAt: new Date(),

@@ -24,6 +24,9 @@ const { joinSetupRooms, emitPresence, routePayment, deliverPayment } = require("
 const oid = () => new Types.ObjectId().toString();
 const tokenFor = (userId, options = { expiresIn: "1h" }) => jwt.sign({ userId }, SECRET, options);
 
+/** STICKER_URL_PREFIX's default, which the harness passes as SocketDeps.stickerUrlPrefix. */
+const STICKER_PREFIX = "https://seemuehub-storage.s3.ap-southeast-1.amazonaws.com/images/";
+
 // ---------------------------------------------------------------- harness
 
 /** Collects the JSON log lines (legacy_socket, sender_override, ...) while a test runs. */
@@ -103,6 +106,7 @@ async function startServer(mode, { partners = {} } = {}) {
     sendGroupMessage: async (_socket, _io, data) => {
       calls.group.push(data);
     },
+    stickerUrlPrefix: STICKER_PREFIX,
   });
 
   await new Promise((r) => httpServer.listen(0, r));
@@ -130,6 +134,13 @@ async function startServer(mode, { partners = {} } = {}) {
 }
 
 const textMessage = (extra = {}) => ({ messageType: "TEXT", content: "hello", ...extra });
+/** A sticker as the contract has clients send it. */
+const stickerMessage = (extra = {}) => ({
+  messageType: "STICKER",
+  content: "STICKER",
+  attachments: [{ fileName: oid(), fileUrl: `${STICKER_PREFIX}stickers/${oid()}.webp` }],
+  ...extra,
+});
 
 // ---------------------------------------------------------------- handshake
 
@@ -447,9 +458,114 @@ test("server-only message types are refused over the socket", async (t) => {
   await t.test("the client types still go through", async () => {
     server.calls.private.length = 0;
     const types = ["TEXT", "IMAGE", "VIDEO", "VOICE", "FILE", "STICKER", "LOCATION"];
-    for (const messageType of types) client.emit("NEW_MESSAGE", textMessage({ receiverId: oid(), messageType }));
+    for (const messageType of types) {
+      // A STICKER also needs its sticker (see "STICKER messages over the socket").
+      const message = messageType === "STICKER" ? stickerMessage() : textMessage({ messageType });
+      client.emit("NEW_MESSAGE", { ...message, receiverId: oid() });
+    }
     await until(() => server.calls.private.length === types.length);
     assert.deepStrictEqual(server.calls.private.map((m) => m.messageType).sort(), [...types].sort());
+  });
+
+  await server.close();
+});
+
+test("STICKER messages over the socket", async (t) => {
+  const me = oid();
+  const server = await startServer("permissive");
+  const client = await connected(server.client({ token: tokenFor(me) }));
+  const conversationId = oid();
+  server.members.set(conversationId, new Set([me]));
+
+  await t.test("a valid sticker is stored, its content forced to STICKER and its attachment cut to the contract", async () => {
+    server.calls.private.length = 0;
+    const fileName = oid();
+    const fileUrl = `${STICKER_PREFIX}stickers/${fileName}.png`;
+    client.emit("NEW_MESSAGE", {
+      messageType: "STICKER",
+      content: "anything at all",
+      receiverId: oid(),
+      attachments: [{ fileName, fileUrl, originalName: "<b>hi</b>", fileSize: "9999999" }],
+    });
+    await until(() => server.calls.private.length === 1);
+    const stored = server.calls.private[0];
+    assert.strictEqual(stored.messageType, "STICKER");
+    assert.strictEqual(stored.content, "STICKER");
+    assert.deepStrictEqual(stored.attachments, [{ fileName, fileUrl }]);
+  });
+
+  await t.test("a sticker sent without content still goes through (content is the service's to set)", async () => {
+    server.calls.private.length = 0;
+    const { content, ...withoutContent } = stickerMessage({ receiverId: oid() });
+    client.emit("NEW_MESSAGE", withoutContent);
+    await until(() => server.calls.private.length === 1);
+    assert.strictEqual(server.calls.private[0].content, "STICKER");
+  });
+
+  const good = () => ({ fileName: oid(), fileUrl: `${STICKER_PREFIX}${oid()}.webp` });
+  const invalid = [
+    ["no attachments", undefined, "ATTACHMENT_COUNT"],
+    ["an empty attachments array", [], "ATTACHMENT_COUNT"],
+    ["two attachments", [good(), good()], "ATTACHMENT_COUNT"],
+    ["attachments that are not an array", good(), "ATTACHMENT_COUNT"],
+    ["an attachment that is not an object", ["https://x/a.png"], "FILE_URL"],
+    ["no fileUrl", [{ fileName: oid() }], "FILE_URL"],
+    ["an image from another host", [{ fileName: oid(), fileUrl: "https://example.com/images/a.png" }], "FILE_URL"],
+    ["the bucket over plain http", [{ fileName: oid(), fileUrl: STICKER_PREFIX.replace("https:", "http:") + "a.png" }], "FILE_URL"],
+    ["the bucket outside images/", [{ fileName: oid(), fileUrl: STICKER_PREFIX.replace("/images/", "/private/") + "a.png" }], "FILE_URL"],
+    ["a lookalike host", [{ fileName: oid(), fileUrl: STICKER_PREFIX.replace(".com/", ".com.evil.net/") + "a.png" }], "FILE_URL"],
+    ["a ../ out of images/", [{ fileName: oid(), fileUrl: `${STICKER_PREFIX}../private/a.png` }], "FILE_URL"],
+    ["an encoded %2e%2e/ out of images/", [{ fileName: oid(), fileUrl: `${STICKER_PREFIX}%2e%2e/private/a.png` }], "FILE_URL"],
+    ["a fileName that is not an id", [{ fileName: "smile.png", fileUrl: `${STICKER_PREFIX}a.png` }], "FILE_NAME"],
+    ["a 23-hex fileName", [{ fileName: oid().slice(1), fileUrl: `${STICKER_PREFIX}a.png` }], "FILE_NAME"],
+    ["no fileName", [{ fileUrl: `${STICKER_PREFIX}a.png` }], "FILE_NAME"],
+  ];
+  for (const [label, attachments, reason] of invalid) {
+    await t.test(`${label}: ERROR INVALID_PAYLOAD (field attachments), nothing stored`, async () => {
+      server.calls.private.length = 0;
+      const _id = oid();
+      const error = nextEvent(client, "ERROR");
+      client.emit("NEW_MESSAGE", { messageType: "STICKER", content: "STICKER", receiverId: oid(), attachments, _id });
+      const payload = await error;
+      assert.deepStrictEqual(
+        { code: payload.code, event: payload.event, field: payload.field, _id: payload._id },
+        { code: "INVALID_PAYLOAD", event: "NEW_MESSAGE", field: "attachments", _id }
+      );
+      await settle();
+      assert.strictEqual(server.calls.private.length, 0);
+      assert.ok(logged("message_refused", { field: "attachments", reason, userId: me }).length >= 1, `logged with reason ${reason}`);
+    });
+  }
+
+  await t.test("NEW_GROUP_MESSAGE is held to the same rule", async () => {
+    const error = nextEvent(client, "ERROR");
+    client.emit("NEW_GROUP_MESSAGE", stickerMessage({ conversationId, attachments: [] }));
+    assert.strictEqual((await error).field, "attachments");
+    await settle();
+    assert.strictEqual(server.calls.group.length, 0);
+
+    client.emit("NEW_GROUP_MESSAGE", stickerMessage({ conversationId, content: "hi" }));
+    await until(() => server.calls.group.length === 1);
+    assert.strictEqual(server.calls.group[0].content, "STICKER");
+  });
+
+  await t.test("a legacy socket is held to the same rule", async () => {
+    server.calls.private.length = 0;
+    const legacy = await connected(server.client(undefined));
+    const error = nextEvent(legacy, "ERROR");
+    legacy.emit("NEW_MESSAGE", stickerMessage({ senderId: oid(), receiverId: oid(), attachments: [{ fileName: oid(), fileUrl: "https://example.com/a.png" }] }));
+    assert.strictEqual((await error).field, "attachments");
+    await settle();
+    assert.strictEqual(server.calls.private.length, 0);
+  });
+
+  await t.test("other types keep their attachments as sent", async () => {
+    server.calls.private.length = 0;
+    const attachments = [{ fileName: "a.png", fileUrl: "https://example.com/a.png" }, { fileName: "b.png", fileUrl: "https://example.com/b.png" }];
+    client.emit("NEW_MESSAGE", textMessage({ receiverId: oid(), messageType: "IMAGE", content: "photos", attachments }));
+    await until(() => server.calls.private.length === 1);
+    assert.deepStrictEqual(server.calls.private[0].attachments, attachments);
+    assert.strictEqual(server.calls.private[0].content, "photos");
   });
 
   await server.close();

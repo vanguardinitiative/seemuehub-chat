@@ -4,10 +4,12 @@ import { requireAdminMiddleware } from "@/middleware/admin";
 import { getMessagesAdmin } from "@/controllers/message/admin";
 import { IRouter, Router } from "express";
 import { conversationModel } from "@/models/conversation";
-import { messageModel } from "@/models/message";
+import { messageModel, MessageType } from "@/models/message";
 import mongoose, { Schema } from "mongoose";
 import { isClientMessageType } from "@/utils/message-type";
+import { checkSticker } from "@/utils/sticker";
 import { messages } from "@/config";
+import { env } from "@/config/env";
 const messageRoute: IRouter = Router();
 
 const orgMemberSchema = new Schema(
@@ -24,6 +26,11 @@ messageRoute.post("/", checkAuthorizationMiddleware, async (req, res) => {
     // (SYSTEM, ORDER_*) is refused rather than quietly downgraded.
     if (messageType !== undefined && !isClientMessageType(messageType))
       return void res.status(400).json(messages.INVALID_MESSAGE_TYPE);
+    // The one exception is a STICKER, which means nothing without its
+    // attachment (utils/sticker.ts): one that passes is stored as a STICKER,
+    // one that does not is refused before anything is read.
+    const sticker = messageType === MessageType.STICKER ? checkSticker(req.body.attachments, env.STICKER_URL_PREFIX) : null;
+    if (sticker && !sticker.ok) return void res.status(400).json(messages.INVALID_STICKER);
     const conversation: any = await conversationModel.findById(conversationId);
     if (!conversation) return void res.status(404).json({ success: false, errors: { code: "CONVERSATION_NOT_FOUND" } });
     if (sendAsOrganizationId) {
@@ -42,12 +49,14 @@ messageRoute.post("/", checkAuthorizationMiddleware, async (req, res) => {
       actorUserId,
       sendAsOrganizationId,
       conversation: conversationId,
-      content: body ?? content,
-      messageType: "TEXT",
+      ...(sticker?.ok
+        ? { content: sticker.content, messageType: MessageType.STICKER, attachments: sticker.attachments, fileUploaded: true }
+        : { content: body ?? content, messageType: "TEXT" }),
     });
     conversation.latestMessageData = {
       senderId: actorUserId,
       messageId: String(message._id),
+      messageType: message.messageType,
       content: message.content,
       sendAt: message.sendAt,
       isDeleted: false,

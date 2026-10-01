@@ -30,9 +30,11 @@ The tests need neither Mongo nor Redis.
 | `CHAT_INTERNAL_KEY` | recommended | Shared with seemuehub-backend. When set, the backend-only routes (`POST /orders`, `POST /core-socket/payment`) require it as `X-Internal-Key`; see [Internal routes](#internal-routes-and-chat_internal_key) |
 | `SOCKET_AUTH_MODE` | no (`permissive`) | `permissive` or `enforce`; see below. Any other value stops the service at boot |
 | `BACKEND_URL` | no | seemuehub-backend's origin (`https://api.seemuehub.com`, no `/api/v1`). With `CHAT_INTERNAL_KEY`, new private messages are pushed through it; see [Push notifications](#push-notifications). Not a URL: the service stops at boot |
+| `STICKER_URL_PREFIX` | no (`https://seemuehub-storage.s3.ap-southeast-1.amazonaws.com/images/`) | Where sticker images live; a `STICKER` message's attachment must start with it (see [Stickers](#stickers)). Only needs setting if the bucket moves. Not an https URL ending in `/`: the service stops at boot |
 
-In production these come from the `ENV` repository secret, which the deploy
-writes to `.env` for `docker-compose.prod.yml` (`env_file: .env`). A changed
+`.env.example` lists them all. In production these come from the `ENV`
+repository secret, which the deploy writes to `.env` for
+`docker-compose.prod.yml` (`env_file: .env`). A changed
 secret takes effect on the next deploy (re-run the latest deploy workflow).
 
 ## Sockets
@@ -76,12 +78,36 @@ A socket that sends no token at all is a **legacy** socket (see
 render as order events) and are refused with `ERROR` `INVALID_PAYLOAD`,
 `field: "messageType"`, from verified and legacy sockets alike. The REST sends
 (`POST /messages`, `POST /organizations/conversations/:id/messages`) store
-`TEXT` and answer 400 to a server-only type.
+`TEXT` (or a valid `STICKER`, below) and answer 400 to a server-only type.
 
 Fields a client cannot set on a message: `sender`, `actorUserId`,
 `sendAsOrganizationId`, `isOrderMessage`, `orderId`, `orderStatus`,
 `orderAction`, `isDeleted`, `deletedAt`, `deletedBy`, `deliveredAllAt`,
 `readAllAt`. They are dropped.
+
+### Stickers
+
+A sticker is a message like any other (`worktrees/STICKER-CONTRACT.md` §4):
+
+```js
+{ messageType: "STICKER", content: "STICKER",
+  attachments: [{ fileName: "<sticker _id>", fileUrl: "<sticker url>" }] }
+```
+
+Every send path (`NEW_MESSAGE`, `NEW_GROUP_MESSAGE` and both REST sends)
+checks it (`src/utils/sticker.ts`): exactly one attachment, a `fileUrl` under
+`STICKER_URL_PREFIX` (also once `..` is resolved), and a `fileName` that is a
+24-hex id. A sticker that passes is stored with `content: "STICKER"` and the
+attachment cut down to `{ fileName, fileUrl }`, whatever was sent. One that
+fails is refused from verified and legacy sockets alike with `ERROR`
+`INVALID_PAYLOAD`, `field: "attachments"`, and over REST with `400`
+`{ code: "CHAT-400", message: "Invalid sticker" }`, before anything is read.
+Whether the sticker still exists in the backend is not checked.
+
+`latestMessageData.messageType` is the latest message's type, so a list can
+say "Sticker". Conversations whose latest message predates it, and the ones
+seemuehub-backend writes itself, have none: treat a missing `messageType`
+with `content: "STICKER"` as a sticker.
 
 ### Server → client
 
@@ -102,7 +128,7 @@ Fields a client cannot set on a message: `sender`, `actorUserId`,
 | `AUTH_REQUIRED` | Legacy socket in `enforce` mode: reconnect with `auth: { token }` |
 | `TOKEN_EXPIRED` | The connection's token has expired since it connected: refresh, reconnect, retry |
 | `NOT_PARTICIPANT` | Not a participant of `conversationId`; nothing was stored or joined |
-| `INVALID_PAYLOAD` | The payload was not an object, or (`field: "messageType"`) its `messageType` is missing or not one a client may send; `_id` echoes the client's id |
+| `INVALID_PAYLOAD` | The payload was not an object, or (`field: "messageType"`) its `messageType` is missing or not one a client may send, or (`field: "attachments"`) a `STICKER` failed the [sticker check](#stickers); `_id` echoes the client's id |
 | `MESSAGE_SEND_FAILED` | Storing the message failed (`message` says why); `_id` echoes the client's id |
 
 ### `SOCKET_AUTH_MODE`
@@ -154,7 +180,8 @@ Other log lines: `socket_auth_refused` (a bad token at the handshake, with its
 code), `setup_user_mismatch` (an authenticated SETUP named another userId),
 `sender_override` (an authenticated message named another senderId),
 `message_refused` (NOT_PARTICIPANT, or INVALID_PAYLOAD with
-`field: "messageType"`).
+`field: "messageType"`, or with `field: "attachments"` and a `reason` of
+`ATTACHMENT_COUNT`, `FILE_URL` or `FILE_NAME` for a sticker).
 
 ## Order conversations
 
