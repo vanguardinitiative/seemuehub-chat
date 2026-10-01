@@ -37,6 +37,7 @@ const getAllConversationsAdmin = async (req: Request, res: Response): Promise<vo
       query.$or = [
         { conversationName: term },
         { orderTitle: term },
+        { workTitle: term },
         { "participants.user": { $in: matchedUsers.map((user) => user._id) } },
       ];
     }

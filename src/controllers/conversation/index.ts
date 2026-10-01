@@ -53,7 +53,7 @@ const createPrivateConversation = async (req: Request, res: Response): Promise<v
           $all: [{ $elemMatch: { user: senderId } }, { $elemMatch: { user: receiverId } }],
         },
       })
-      .populate("participants.user", "fullName phone email role profileImage");
+      .populate("participants.user", "userName displayName isFreelancer phone email role profileImage");
 
     console.log("existingConversation===>", existingConversation);
 
@@ -112,7 +112,7 @@ const createPrivateConversation = async (req: Request, res: Response): Promise<v
     //   .findOne({
     //     _id: newConversation._id,
     //   })
-    //   .populate("participants.user", "fullName phone email role profileImage isOnline");
+    //   .populate("participants.user", "userName displayName isFreelancer phone email role profileImage isOnline");
 
     res.status(201).json({
       code: messages.CREATE_SUCCESSFUL.code,
@@ -137,7 +137,7 @@ const createGroupConversation = async (req: Request, res: Response): Promise<voi
           $all: [{ $elemMatch: { user: senderId } }],
         },
       })
-      .populate("participants.user", "fullName phone email role profileImage");
+      .populate("participants.user", "userName displayName isFreelancer phone email role profileImage");
     console.log("step 2");
 
     if (existingConversation) {
@@ -184,7 +184,7 @@ const createGroupConversation = async (req: Request, res: Response): Promise<voi
       .findOne({
         _id: newConversation._id,
       })
-      .populate("participants.user", "fullName phone email role profileImage isOnline");
+      .populate("participants.user", "userName displayName isFreelancer phone email role profileImage isOnline");
 
     res.status(201).json({
       code: messages.CREATE_SUCCESSFUL.code,
@@ -225,7 +225,7 @@ const getConversation = async (req: Request, res: Response): Promise<void> => {
         _id: id,
         ...participantOf(userId),
       })
-      .populate("participants.user", "fullName phone email role profileImage");
+      .populate("participants.user", "userName displayName isFreelancer phone email role profileImage");
     if (!conversation) {
       // 404 rather than 403, and deliberately the same 404 a missing
       // conversation gets. A 403 would confirm the id is real, which is exactly

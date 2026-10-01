@@ -4,6 +4,7 @@ import { Request, Response } from "express";
 import mongoose from "mongoose";
 import { conversationModel } from "@/models/conversation";
 import { messageModel, MessageType } from "@/models/message";
+import { orderStepMessage } from "./step-message";
 
 // Handle order status update - creates automatic message and updates conversation
 const handleOrderStatusUpdate = async (orderData: {
@@ -21,37 +22,7 @@ const handleOrderStatusUpdate = async (orderData: {
       return null;
     }
 
-    // Determine message type based on status
-    let messageContent = `Order status updated to ${orderStatus}`;
-
-    switch (orderStatus) {
-      case "SUBMITTED_PROPOSAL":
-        messageContent = "ສ້າງໃບສະເໜີລາຄາສຳເລັດເເລ້ວ ສາມາດກວດສອບໄດ້ເລີຍ";
-        break;
-      case "ACCEPTED_PROPOSAL":
-        messageContent = "ອະນຸມັດໃບສະເໜີລາຄາສຳເລັດເເລ້ວ";
-        break;
-      case "REJECTED_PROPOSAL":
-        messageContent = "ປະຕິເສດໃບສະເໜີລາຄາ";
-        break;
-      case "PAYMENT_SUCCESS":
-        messageContent = "ຊຳລະເງິນສຳເລັດເເລ້ວ ເລີ່ມວຽກໄດ້ເລີຍ";
-        break;
-      case "SUBMITTED_DELIVERABLE":
-        messageContent = "ສົ່ງມອບວຽກເເລ້ວ ສາມາດກວດສອບໄດ້ເລີຍ";
-        break;
-      case "REJECTED_DELIVERABLE":
-        messageContent = "ຕ້ອງການເເກ້ໄຂການສົ່ງມອບວຽກ";
-        break;
-      case "COMPLETED":
-        messageContent = "Order ສຳເລັດເເລ້ວ";
-        break;
-      // The buyer or the seller cancelled the unpaid order; nothing more can be
-      // done to it, but the conversation stays open.
-      case "CANCELLED":
-        messageContent = "Order ຖືກຍົກເລີກແລ້ວ";
-        break;
-    }
+    const messageContent = orderStepMessage(orderStatus);
 
     // Create automatic message
     const orderMessage = await messageModel.create({
