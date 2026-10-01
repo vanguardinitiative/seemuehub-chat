@@ -64,6 +64,7 @@ const sendPrivateMessage = async (socket: Socket, io: Server, data: MessageData)
         latestMessageData: {
           senderId: data.senderId,
           messageId: messageData._id,
+          messageType: messageData.messageType,
           content: data.content,
           readAllAt: null,
           sendAt: new Date(),
@@ -165,6 +166,7 @@ const sendGroupMessage = async (socket: Socket, io: Server, data: MessageData): 
         latestMessageData: {
           senderId: data.senderId,
           messageId: messageData._id,
+          messageType: messageData.messageType,
           content: data.content,
           readAllAt: null,
           sendAt: new Date(),

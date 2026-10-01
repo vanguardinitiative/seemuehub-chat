@@ -2,9 +2,11 @@ import { Router, type Request, type Response } from "express";
 import mongoose, { Schema } from "mongoose";
 import { checkAuthorizationMiddleware } from "@/middleware";
 import { conversationModel } from "@/models/conversation";
-import { messageModel } from "@/models/message";
+import { messageModel, MessageType } from "@/models/message";
 import { messages } from "@/config";
 import { isClientMessageType } from "@/utils/message-type";
+import { checkSticker } from "@/utils/sticker";
+import { env } from "@/config/env";
 
 const router = Router();
 const memberSchema = new Schema({ organizationId: Schema.Types.ObjectId, userId: Schema.Types.ObjectId, role: String, status: String }, { collection: "organizationmembers" });
@@ -34,10 +36,14 @@ router.post("/conversations/:conversationId/messages", async (req: Request, res:
   try {
     // Stored as TEXT; a server-only type (SYSTEM, ORDER_*) is refused, not downgraded.
     if (req.body?.messageType !== undefined && !isClientMessageType(req.body.messageType)) return void res.status(400).json(messages.INVALID_MESSAGE_TYPE);
+    // A STICKER is the exception: stored as one when it passes utils/sticker.ts, refused before anything is read when it does not.
+    const sticker = req.body.messageType === MessageType.STICKER ? checkSticker(req.body.attachments, env.STICKER_URL_PREFIX) : null;
+    if (sticker && !sticker.ok) return void res.status(400).json(messages.INVALID_STICKER);
     const actor = uid(req), conversation: any = await conversationModel.findById(req.params.conversationId); if (!conversation) return void res.status(404).json({ success: false, errors: { code: "CONVERSATION_NOT_FOUND" } });
     if (!conversation.organizationId || !(await requireMember(String(conversation.organizationId), actor))) return void res.status(403).json({ success: false, errors: { code: "ORGANIZATION_MEMBERSHIP_REQUIRED" } });
-    const item = await messageModel.create({ sender: actor, actorUserId: actor, sendAsOrganizationId: conversation.organizationId, conversation: conversation._id, content: req.body.body ?? req.body.content, messageType: "TEXT" });
-    conversation.latestMessageData = { senderId: actor, messageId: String(item._id), content: item.content, sendAt: item.sendAt, isDeleted: false }; await conversation.save();
+    const stored = sticker?.ok ? { content: sticker.content, messageType: MessageType.STICKER, attachments: sticker.attachments, fileUploaded: true } : { content: req.body.body ?? req.body.content, messageType: "TEXT" };
+    const item = await messageModel.create({ sender: actor, actorUserId: actor, sendAsOrganizationId: conversation.organizationId, conversation: conversation._id, ...stored });
+    conversation.latestMessageData = { senderId: actor, messageId: String(item._id), messageType: item.messageType, content: item.content, sendAt: item.sendAt, isDeleted: false }; await conversation.save();
     res.status(201).json({ success: true, data: item });
   } catch (error) { res.status(500).json({ success: false, errors: { code: "INTERNAL_EXCEPTION", message: "Something went wrong" } }); }
 });

@@ -37,6 +37,7 @@ export const setupSocketService = (server: any) => {
     conversationPartners,
     sendPrivateMessage,
     sendGroupMessage,
+    stickerUrlPrefix: env.STICKER_URL_PREFIX,
   });
 
   return io;

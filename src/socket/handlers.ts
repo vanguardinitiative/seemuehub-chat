@@ -2,6 +2,7 @@ import type { Server, Socket } from "socket.io";
 import { Types } from "mongoose";
 import { actorFor, dataOf, logEvent, logLegacyConnection, refuse, socketAuthMiddleware, type SocketAuthMode } from "./auth";
 import { isClientMessageType } from "@/utils/message-type";
+import { checkSticker } from "@/utils/sticker";
 
 /**
  * The client-facing socket events. Everything that touches Redis or Mongo
@@ -35,6 +36,8 @@ export interface SocketDeps {
   conversationPartners: (userId: string) => Promise<string[]>;
   sendPrivateMessage: (socket: Socket, io: Server, data: MessagePayload) => Promise<void>;
   sendGroupMessage: (socket: Socket, io: Server, data: MessagePayload) => Promise<void>;
+  /** STICKER_URL_PREFIX: where a STICKER's image must live (utils/sticker.ts). */
+  stickerUrlPrefix: string;
 }
 
 /**
@@ -197,6 +200,28 @@ const handleMessage = async (
   }
 
   const message = withoutReservedFields(raw as Record<string, unknown>);
+
+  // A STICKER is drawn as a bare image, so it may only point at one of ours
+  // (see utils/sticker.ts). Legacy sockets too, like the type check above.
+  if (messageType === "STICKER") {
+    const sticker = checkSticker(message.attachments, deps.stickerUrlPrefix);
+    if (!sticker.ok) {
+      logEvent({
+        msg: "message_refused",
+        event,
+        code: "INVALID_PAYLOAD",
+        field: "attachments",
+        reason: sticker.reason,
+        socketId: socket.id,
+        userId: actor.kind === "verified" ? actor.userId : null,
+      });
+      refuse(socket, event, "INVALID_PAYLOAD", { field: "attachments", _id: message._id ?? null });
+      return;
+    }
+    message.content = sticker.content;
+    message.attachments = sticker.attachments;
+  }
+
   const send = event === "NEW_MESSAGE" ? deps.sendPrivateMessage : deps.sendGroupMessage;
 
   // Legacy (permissive only): the payload's senderId is trusted, as it

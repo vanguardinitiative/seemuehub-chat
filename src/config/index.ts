@@ -75,6 +75,10 @@ export const messages = {
     code: "CHAT-400",
     message: "Invalid message type",
   },
+  INVALID_STICKER: {
+    code: "CHAT-400",
+    message: "Invalid sticker",
+  },
   PARTICIPANT_NOT_FOUND: {
     code: "CHAT-404",
     message: "Participant not found in conversation",

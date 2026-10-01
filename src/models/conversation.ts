@@ -57,6 +57,12 @@ interface ILatestMessageData {
    * ACCEPTED_ORDER, AUTO_APPROVED, DISPUTE_OPENED, …), not an order status.
    */
   orderStep?: string;
+  /**
+   * The latest message's type, so the list can say "Sticker" or "Photo"
+   * instead of showing its content. Rows written before this field existed,
+   * and the ones seemuehub-backend writes itself, have none.
+   */
+  messageType?: string;
 }
 
 export interface IConversation extends Document {
@@ -129,6 +135,9 @@ const conversationSchema = new Schema<IConversation>(
       // A step name, not an order status: the backend adds steps over time, and
       // an enum here would reject them on any validated write.
       orderStep: String,
+      // Not an enum, for the same reason: this is a copy of the message's
+      // type, and the message model is where the type is validated.
+      messageType: String,
     },
     background: String,
     // Order integration fields
