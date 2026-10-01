@@ -156,6 +156,27 @@ code), `setup_user_mismatch` (an authenticated SETUP named another userId),
 `message_refused` (NOT_PARTICIPANT, or INVALID_PAYLOAD with
 `field: "messageType"`).
 
+## Order conversations
+
+seemuehub-backend creates an order's conversation when the order is created
+(`conversationType: "ORDER"`, the buyer and the seller as participants) and
+syncs `orderStatus` / `isOrderActive` onto it as the order moves, including
+`CANCELLED`. A finished or cancelled order keeps its chat: nothing here
+deletes or hides it.
+
+- `GET /conversations` lists every conversation of the caller, cancelled
+  orders included. `?orderStatus=NOT_COMPLETE` leaves out `COMPLETED` and
+  `CANCELLED`; any other value matches that status exactly.
+- To open an order's chat from the order screen:
+  `POST /conversations/private` with `{ receiverId, orderId }`, `receiverId`
+  being the other party. It answers `201` with the existing conversation
+  whatever the order's status, or `data: null` while the backend has not
+  created it yet. It never creates one.
+- The daily cron (`src/services/cron.ts`, 02:00) marks a conversation still
+  `PENDING` 30 days after it was created `CANCELLED` and inactive. It only
+  relabels the conversation (not the order in the backend), and the chat
+  stays readable.
+
 ## Internal routes and `CHAT_INTERNAL_KEY`
 
 Two routes are for seemuehub-backend only:

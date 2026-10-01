@@ -293,6 +293,15 @@ const getAllConversions = async (req: Request, res: Response): Promise<void> => 
     const query: ConversationQuery = {
       "participants.user": new Types.ObjectId(userId),
     };
+    // No filter means every conversation, cancelled orders included.
+    //
+    // This used to default to `orderStatus: { $ne: CANCELLED }`. Once the
+    // backend began syncing CANCELLED onto the conversation when an order is
+    // cancelled (seemuehub-backend#39), that default made the chat vanish the
+    // moment its order was cancelled: the list is how the clients find an
+    // order's conversation, so its history could no longer be opened at all.
+    // The clients split active from history themselves; a caller that only
+    // wants the open ones asks for NOT_COMPLETE.
     if (orderStatus) {
       if (orderStatus === "NOT_COMPLETE") {
         // Exclude COMPLETED and CANCELLED
@@ -300,9 +309,6 @@ const getAllConversions = async (req: Request, res: Response): Promise<void> => 
       } else {
         query.orderStatus = orderStatus; // accepts CANCELLED, COMPLETED, etc.
       }
-    } else {
-      // Default: exclude CANCELLED
-      query.orderStatus = { $ne: OrderStatus.CANCELLED };
     }
 
     if (search) {
