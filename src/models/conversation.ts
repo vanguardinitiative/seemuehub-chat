@@ -52,7 +52,11 @@ interface ILatestMessageData {
   content?: string;
   sendAt?: Date;
   isDeleted: boolean;
-  orderStep?: OrderStatus;
+  /**
+   * The order step the backend last posted (SUBMITTED_PROPOSAL, PAYMENT_SUCCESS,
+   * ACCEPTED_ORDER, AUTO_APPROVED, DISPUTE_OPENED, …), not an order status.
+   */
+  orderStep?: string;
 }
 
 export interface IConversation extends Document {
@@ -66,7 +70,8 @@ export interface IConversation extends Document {
   background?: string;
   // Order integration fields
   orderStatus?: string; // Current order status
-  orderTitle?: string; // Order title for display
+  orderTitle?: string; // Order title for display (the package name)
+  workTitle?: string; // The gig's or job's title, set by the backend
   orderBudget?: {
     amount: number;
     currency: string;
@@ -121,10 +126,9 @@ const conversationSchema = new Schema<IConversation>(
         default: Date.now,
       },
       isDeleted: { type: Boolean, default: false },
-      orderStep: {
-        type: String,
-        enum: Object.values(OrderStatus),
-      },
+      // A step name, not an order status: the backend adds steps over time, and
+      // an enum here would reject them on any validated write.
+      orderStep: String,
     },
     background: String,
     // Order integration fields
@@ -134,6 +138,7 @@ const conversationSchema = new Schema<IConversation>(
       index: true,
     },
     orderTitle: String,
+    workTitle: String,
     orderBudget: {
       amount: { type: Number, min: 0 },
       currency: { type: String, default: "THB" },
