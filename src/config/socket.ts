@@ -30,8 +30,8 @@ export const setupSocketService = (server: any) => {
 
   console.log(`Socket auth mode: ${env.SOCKET_AUTH_MODE}`);
 
-  // Handshake auth, SETUP, NEW_MESSAGE, NEW_GROUP_MESSAGE, REACT_MESSAGE and
-  // disconnect: see src/socket/handlers.ts.
+  // Handshake auth, SETUP, NEW_MESSAGE, NEW_GROUP_MESSAGE, REACT_MESSAGE,
+  // TYPING and disconnect: see src/socket/handlers.ts.
   registerSocketHandlers(io, {
     mode: env.SOCKET_AUTH_MODE,
     publish: (channel, message) => pub.publish(channel, message),

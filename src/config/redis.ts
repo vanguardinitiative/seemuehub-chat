@@ -10,11 +10,13 @@ import {
   deliverPayment,
   deliverReaction,
   deliverReadMessage,
+  deliverTyping,
   emitPresence,
   joinSetupRooms,
   routePayment,
   type ReactionNotice,
   type ReadMessageNotice,
+  type TypingNotice,
 } from "@/socket/rooms";
 
 // Redis configuration matching seemuehub-backend style
@@ -192,6 +194,16 @@ const subscribeToClient = async (io: Server): Promise<void> => {
         deliverReaction(io, JSON.parse(message) as ReactionNotice);
       } catch (error) {
         console.error("Error processing REACTION:", error instanceof Error ? error.message : error);
+      }
+    });
+
+    sub.subscribe("TYPING", async (message: string) => {
+      try {
+        // Published by TYPING and on disconnect (src/socket/handlers.ts): the
+        // other participants only. See deliverTyping.
+        deliverTyping(io, JSON.parse(message) as TypingNotice);
+      } catch (error) {
+        console.error("Error processing TYPING:", error instanceof Error ? error.message : error);
       }
     });
 

@@ -116,6 +116,29 @@ export const deliverReaction = (io: Server, notice: ReactionNotice): void => {
   });
 };
 
+/** What TYPING publishes on Redis `TYPING` (CHAT-CONTRACT.md §4.1). */
+export interface TypingNotice {
+  userIds?: unknown;
+  conversationId?: unknown;
+  userId?: unknown;
+  typing?: unknown;
+}
+
+/**
+ * TYPING goes to the other participants' rooms only: the publisher already
+ * left the typer out, and the typer's own room is dropped here again, so
+ * their other devices never show their own dots.
+ */
+export const deliverTyping = (io: Server, notice: TypingNotice): void => {
+  const rooms = userRooms(notice?.userIds).filter((room) => room !== notice.userId);
+  // Never io.to([]): socket.io treats an empty room list as "everyone".
+  if (rooms.length === 0) return;
+  io.to(rooms).emit("CONVERSATION_LISTENING", {
+    type: "TYPING",
+    response: { conversationId: notice.conversationId, userId: notice.userId, typing: notice.typing === true },
+  });
+};
+
 export interface PaymentEvent {
   type: "PAYMENT";
   response: unknown;

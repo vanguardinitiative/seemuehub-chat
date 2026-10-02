@@ -28,6 +28,7 @@ import {
 } from "@/utils/reactions";
 import { idString } from "@/utils/ids";
 import { checkSticker } from "@/utils/sticker";
+import { makeRoomForTyping, membershipExpired, newTypingEntry, stillTyping, typingPasses, type TypingEntry } from "./typing";
 
 /**
  * The client-facing socket events. Everything that touches Redis or Mongo
@@ -60,6 +61,15 @@ export interface ReactionMessage {
   conversationId: string;
   messageId: string;
   reactions: ReturnType<typeof reactionViews>;
+}
+
+/** What TYPING publishes on Redis `TYPING` (see socket/rooms.ts deliverTyping). */
+export interface TypingMessage {
+  /** The other participants; never the typer. */
+  userIds: string[];
+  conversationId: string;
+  userId: string;
+  typing: boolean;
 }
 
 export interface SocketDeps {
@@ -159,7 +169,14 @@ export const registerSocketHandlers = (io: Server, deps: SocketDeps): void => {
       });
     });
 
+    socket.on("TYPING", (data: unknown) => {
+      handleTyping(socket, deps, data).catch((error) => {
+        console.error("TYPING failed", { socketId: socket.id, error: error instanceof Error ? error.message : error });
+      });
+    });
+
     socket.on("disconnect", () => {
+      stopTyping(socket, deps);
       const { roomUserId, partners } = dataOf(socket);
       // Only SETUP records a socketId on the user, so a socket that never
       // set up has nothing to mark offline.
@@ -408,6 +425,117 @@ const handleReaction = async (socket: Socket, deps: SocketDeps, raw: unknown): P
       ).catch(() => {});
     } catch (error) {
       console.error("reaction push failed", { socketId: socket.id, error: error instanceof Error ? error.message : error });
+    }
+  }
+};
+
+const typingEntriesOf = (socket: Socket): Map<string, TypingEntry> => {
+  const data = dataOf(socket);
+  if (!(data.typing instanceof Map)) data.typing = new Map();
+  return data.typing;
+};
+
+/**
+ * TYPING { conversationId, typing } (CHAT-CONTRACT.md §4.1): relayed to the
+ * conversation's other participants, nothing written anywhere.
+ *
+ * - An authenticated socket only (AUTH_REQUIRED otherwise, as REACT_MESSAGE).
+ * - `conversationId` an ObjectId and `typing` a boolean: else ERROR
+ *   INVALID_PAYLOAD.
+ * - Membership is looked up once and cached on the socket for 10 minutes,
+ *   with the other participants (socket/typing.ts). Not a participant: ERROR
+ *   NOT_PARTICIPANT (that answer is kept for a minute).
+ * - At most one forwarded per second per conversation; the rest are dropped
+ *   silently, except a `typing: false` after a forwarded `true`.
+ */
+const handleTyping = async (socket: Socket, deps: SocketDeps, raw: unknown): Promise<void> => {
+  const event = "TYPING";
+  const actor = verifiedActorFor(socket, event, deps.mode, deps.now);
+  if (!actor) return;
+
+  const data = (raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {}) as Record<string, unknown>;
+  const conversationId = data.conversationId;
+  const typing = data.typing;
+  if (!isObjectId(conversationId) || typeof typing !== "boolean") {
+    refuse(socket, event, "INVALID_PAYLOAD", {
+      conversationId: typeof conversationId === "string" ? conversationId.slice(0, 64) : null,
+    });
+    return;
+  }
+
+  const now = deps.now ?? Date.now;
+  const entries = typingEntriesOf(socket);
+  let entry = entries.get(conversationId);
+  if (!entry) {
+    makeRoomForTyping(entries);
+    entry = newTypingEntry();
+    entries.set(conversationId, entry);
+  }
+
+  if (!entry.pending && membershipExpired(entry, now())) {
+    const checking = entry;
+    checking.pending = deps
+      .membersOf(conversationId, actor.userId)
+      .then(
+        (members) => {
+          checking.member = members !== null;
+          checking.others = (members ?? []).map((member) => member.userId).filter((id) => id !== actor.userId);
+          checking.checkedAt = now();
+          return true;
+        },
+        (error) => {
+          // Typing is a nicety: a failed lookup drops the events waiting on
+          // it, quietly, and the next event tries again.
+          console.error("TYPING membership lookup failed", {
+            socketId: socket.id,
+            conversationId,
+            error: error instanceof Error ? error.message : error,
+          });
+          return false;
+        }
+      )
+      .finally(() => {
+        checking.pending = undefined;
+      });
+  }
+  // Events that arrive while the lookup runs wait for that one lookup, and
+  // then go on in the order they came.
+  if (entry.pending && !(await entry.pending)) return;
+
+  if (!entry.member) {
+    refuse(socket, event, "NOT_PARTICIPANT", { conversationId });
+    return;
+  }
+
+  // Gone while the lookup ran: its disconnect has already said "stopped".
+  if (!socket.connected) return;
+
+  const at = now();
+  if (!typingPasses(entry, typing, at)) return;
+  entry.lastForwardedAt = at;
+  entry.typing = typing;
+  if (entry.others.length === 0) return;
+
+  const message: TypingMessage = { userIds: [...entry.others], conversationId, userId: actor.userId, typing };
+  await deps.publish("TYPING", JSON.stringify(message));
+};
+
+/**
+ * On disconnect: `typing: false` for every conversation this socket last
+ * reported `typing: true` in, so nobody is left watching dots.
+ */
+const stopTyping = (socket: Socket, deps: SocketDeps): void => {
+  const data = dataOf(socket);
+  const userId = data.userId;
+  const typing = stillTyping(data.typing);
+  data.typing?.clear();
+  if (!userId) return;
+  for (const { conversationId, others } of typing) {
+    const message: TypingMessage = { userIds: others, conversationId, userId, typing: false };
+    try {
+      void Promise.resolve(deps.publish("TYPING", JSON.stringify(message))).catch(() => {});
+    } catch (error) {
+      console.error("TYPING stop failed", { socketId: socket.id, error: error instanceof Error ? error.message : error });
     }
   }
 };

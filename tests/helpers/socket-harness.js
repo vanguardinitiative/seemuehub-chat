@@ -12,6 +12,7 @@
  * Not a test file (node --test only picks up *.test.js here).
  */
 const http = require("node:http");
+const { after } = require("node:test");
 const { Server } = require("socket.io");
 const { io: connect } = require("socket.io-client");
 const jwt = require("jsonwebtoken");
@@ -73,6 +74,16 @@ const connected = (client) =>
   });
 
 /**
+ * Servers still open when the file's tests end (a failed assertion skips a
+ * test's own close): closed here, so a failure fails the file instead of
+ * keeping its process alive.
+ */
+const open = new Set();
+after(async () => {
+  for (const server of [...open]) await server.close();
+});
+
+/**
  * @param {object} options
  * @param {"permissive"|"enforce"} [options.mode]
  * @param {object} [options.deps] SocketDeps overrides
@@ -121,7 +132,7 @@ async function startServer({ mode = "permissive", deps = {} } = {}) {
   const url = `http://localhost:${httpServer.address().port}`;
   const clients = [];
 
-  return {
+  const server = {
     io,
     calls,
     /** Sets a conversation's participants: user ids, or { userId, isMuted }. */
@@ -147,11 +158,14 @@ async function startServer({ mode = "permissive", deps = {} } = {}) {
     serverSocket: (client) => io.sockets.sockets.get(client.id),
     published: (channel) => calls.published.filter((p) => p.channel === channel).map((p) => p.message),
     async close() {
+      if (!open.delete(server)) return;
       for (const client of clients) client.disconnect();
       io.close();
       await settle(20);
     },
   };
+  open.add(server);
+  return server;
 }
 
 module.exports = {

@@ -1,5 +1,6 @@
 import type { Socket } from "socket.io";
 import { AccessTokenError, verifyAccessToken } from "@/utils/access-token";
+import type { TypingEntry } from "./typing";
 
 /**
  * Who is on the other end of a socket.
@@ -34,6 +35,8 @@ export interface SocketData {
   partners?: string[];
   /** When this socket's recent REACT_MESSAGEs were accepted, for the rate limit. */
   reactionTimes?: number[];
+  /** TYPING state per conversationId (socket/typing.ts): membership, throttle, and what was last said. */
+  typing?: Map<string, TypingEntry>;
 }
 
 export const dataOf = (socket: Socket): SocketData => socket.data as SocketData;
