@@ -10,6 +10,7 @@ import { messages } from "@/config";
 import { messageStatusModel } from "@/models/messageStatus";
 import { isParticipant, participantOf, userIdOf } from "@/utils/conversation-access";
 import { logEvent } from "@/socket/auth";
+import { resolveReply } from "./reply";
 
 interface MessageData {
   messageType: string;
@@ -18,6 +19,8 @@ interface MessageData {
   senderId: string;
   receiverId: string;
   _id?: string;
+  /** The message this one answers (CHAT-CONTRACT.md §2.2); checked by resolveReply. */
+  replyTo?: unknown;
 }
 
 /** Aborts the send's transaction; a failure to abort is logged, never thrown over the send's own error. */
@@ -85,11 +88,20 @@ const sendPrivateMessage = async (socket: Socket, io: Server, data: MessageData)
 
     const newConversationId = conversation?._id || data.conversationId;
     const customId = data._id ? new mongoose.Types.ObjectId(data._id) : new mongoose.Types.ObjectId();
+    // Checked against the conversation just resolved; an invalid reply is
+    // dropped and the message still goes (CHAT-CONTRACT.md §2.2).
+    const reply = await resolveReply(data.replyTo, newConversationId, session, {
+      event: "NEW_MESSAGE",
+      socketId: socket?.id,
+      userId: String(data.senderId),
+    });
 
     const [messageData] = await messageModel.create(
       [
         {
           ...data,
+          ...reply,
+          reactions: undefined,
           _id: customId,
           messageType: data.messageType,
           // fileUploaded: data.messageType === MessageType.IMAGE ? false : true,
@@ -192,11 +204,18 @@ const sendGroupMessage = async (socket: Socket, io: Server, data: MessageData): 
     }
     const newConversationId = data.conversationId;
     const customId = data._id ? new mongoose.Types.ObjectId(data._id) : new mongoose.Types.ObjectId();
+    const reply = await resolveReply(data.replyTo, newConversationId, session, {
+      event: "NEW_GROUP_MESSAGE",
+      socketId: socket?.id,
+      userId: String(data.senderId),
+    });
 
     const [messageData] = await messageModel.create(
       [
         {
           ...data,
+          ...reply,
+          reactions: undefined,
           _id: customId,
           messageType: data.messageType,
           // fileUploaded: data.messageType === MessageType.IMAGE ? false : true,
