@@ -91,6 +91,8 @@ test("GET /conversations", async (t) => {
       return query([{ ...cancelled }]);
     }),
     stub(messageStatusModel, "find", () => query([])),
+    // The list records the page as delivered (CHAT-CONTRACT.md §5.1).
+    stub(conversationModel, "updateMany", async () => ({ matchedCount: 1, modifiedCount: 1 })),
   ];
   const list = (search = "") => request(port, "GET", `/v1/api/conversations${search}`, { token: tokenFor(me) });
 
@@ -154,6 +156,8 @@ test("a cancelled order's conversation can still be read by its participants", a
     // GET /conversations/:id asks for the legacy read receipt of an unread
     // latest message (latestMessageData.isRead, read-state.test.js).
     stub(messageStatusModel, "find", () => query([])),
+    // GET /messages records the conversation as delivered (CHAT-CONTRACT.md §5.1).
+    stub(conversationModel, "updateOne", async () => ({ matchedCount: 1, modifiedCount: 1 })),
   ];
   const assertMembershipOnly = (expectedKeys) => {
     assert.strictEqual(lookups.length, 1);

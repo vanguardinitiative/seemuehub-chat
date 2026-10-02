@@ -7,9 +7,10 @@ import { messageModel } from "@/models/message";
 /**
  * Oversight transcript: any conversation's messages.
  *
- * `getAllMessage` gates on `isParticipant`, which is correct for members and
- * exactly what an admin investigating a dispute cannot satisfy. This is the
- * same query without that probe, behind `requireAdminMiddleware`.
+ * `getAllMessage` gates on a membership-filtered conversation lookup, which
+ * is correct for members and exactly what an admin investigating a dispute
+ * cannot satisfy. This is the same query without that probe (and without
+ * recording a delivery), behind `requireAdminMiddleware`.
  *
  * Returned oldest-first so the transcript reads top to bottom, unlike the
  * member endpoint which pages backwards from the newest message.

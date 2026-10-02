@@ -6,7 +6,9 @@ import { conversationModel, IParticipant } from "@/models/conversation";
 import { pub } from "@/config/redis";
 import mongoose from "mongoose";
 import { participantOf, userIdOf } from "@/utils/conversation-access";
-import { allOthersRead, participantIdOf } from "@/utils/read-state";
+import { allOthersRead, covers, participantIdOf } from "@/utils/read-state";
+import { deliveryMoves, otherParticipants } from "@/utils/delivered";
+import { publishDelivered } from "@/services/delivered";
 
 interface ReadConversation {
   _id: mongoose.Types.ObjectId;
@@ -21,11 +23,30 @@ interface ReadConversation {
 }
 
 /**
+ * The conversation as the read's update left it, from the copy it returned
+ * from before: the reader's lastReadAt and lastDeliveredAt each moved to `at`
+ * unless already later (the $max).
+ */
+const afterRead = (before: ReadConversation, readerId: string, at: Date): ReadConversation => ({
+  ...before,
+  participants: (before.participants ?? []).map((participant) =>
+    participantIdOf(participant) === readerId
+      ? {
+          ...participant,
+          lastReadAt: covers(participant.lastReadAt, at) ? participant.lastReadAt : at,
+          lastDeliveredAt: covers(participant.lastDeliveredAt, at) ? participant.lastDeliveredAt : at,
+        }
+      : participant
+  ),
+});
+
+/**
  * PUT /message-status/read?conversationId= (worktrees/CHAT-CONTRACT.md §1.2).
  *
- * Marks the conversation read for the caller by moving their
- * `participants[].lastReadAt` forward, then sets `latestMessageData.readAllAt`
- * once everyone but the latest sender has read it. The body is ignored (the
+ * Marks the conversation read (and delivered, §5.1) for the caller by moving
+ * their `participants[].lastReadAt` and `lastDeliveredAt` forward, then sets
+ * `latestMessageData.readAllAt` once everyone but the latest sender has read
+ * it. The body is ignored (the
  * old web sends `{userId}`; the reader is always the token's user).
  *
  * Every conversation write here is an update with `timestamps: false`:
@@ -52,24 +73,29 @@ const updateReadStatus = async (req: Request, res: Response): Promise<void> => {
 
     // Record the read. Membership is part of the filter, so "not yours" and
     // "does not exist" are the same 404 (utils/conversation-access.ts). $max
-    // keeps a read mark from moving back when two devices race.
+    // keeps a read mark from moving back when two devices race. Reading also
+    // delivers (CHAT-CONTRACT.md §5.1), in the same update. It returns the
+    // conversation as it was before, which is how this knows whether the
+    // delivered mark has just moved past the latest message; afterRead gives
+    // the conversation as it is now.
     const now = new Date();
-    const conversation = await conversationModel
+    const before = await conversationModel
       .findOneAndUpdate(
         { _id: conversationId, ...participantOf(readerId) },
-        { $max: { "participants.$[me].lastReadAt": now } },
+        { $max: { "participants.$[me].lastReadAt": now, "participants.$[me].lastDeliveredAt": now } },
         {
           arrayFilters: [{ "me.user": new mongoose.Types.ObjectId(readerId) }],
-          new: true,
+          returnDocument: "before",
           timestamps: false,
         }
       )
       .lean<ReadConversation>();
-    if (!conversation) {
+    if (!before) {
       console.warn("[access] read status refused", { conversationId, userId: readerId });
       res.status(404).json(messages.CONVERSATION_NOT_FOUND);
       return;
     }
+    const conversation = afterRead(before, readerId, now);
 
     const participants = conversation.participants ?? [];
     const mine = participants.find((participant) => participantIdOf(participant) === readerId);
@@ -135,6 +161,12 @@ const updateReadStatus = async (req: Request, res: Response): Promise<void> => {
         readAllAt: readAllAt ? readAllAt.toISOString() : null,
       })
     );
+
+    // This read is also what delivered the latest message from someone else:
+    // the other participants hear DELIVERED (CHAT-CONTRACT.md §5.1).
+    if (deliveryMoves(before, readerId, now)) {
+      publishDelivered({ userIds: otherParticipants(before, readerId), conversationId, userId: readerId, deliveredAt: now.toISOString() });
+    }
 
     res.status(200).json({
       code: messages.SUCCESSFULLY.code,

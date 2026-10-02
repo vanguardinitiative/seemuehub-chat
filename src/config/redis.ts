@@ -7,6 +7,7 @@ import { userModel } from "@/models/user";
 import { env } from "./env";
 import { describeRedisConfig } from "./redis-log";
 import {
+  deliverDelivered,
   deliverPayment,
   deliverReaction,
   deliverReadMessage,
@@ -14,6 +15,7 @@ import {
   emitPresence,
   joinSetupRooms,
   routePayment,
+  type DeliveredNotice,
   type ReactionNotice,
   type ReadMessageNotice,
   type TypingNotice,
@@ -204,6 +206,17 @@ const subscribeToClient = async (io: Server): Promise<void> => {
         deliverTyping(io, JSON.parse(message) as TypingNotice);
       } catch (error) {
         console.error("Error processing TYPING:", error instanceof Error ? error.message : error);
+      }
+    });
+
+    sub.subscribe("DELIVERED", async (message: string) => {
+      try {
+        // Published when a recipient's lastDeliveredAt moves past the latest
+        // message (the socket's DELIVERED, the list and messages GETs, the
+        // read PUT): the other participants only. See deliverDelivered.
+        deliverDelivered(io, JSON.parse(message) as DeliveredNotice);
+      } catch (error) {
+        console.error("Error processing DELIVERED:", error instanceof Error ? error.message : error);
       }
     });
 

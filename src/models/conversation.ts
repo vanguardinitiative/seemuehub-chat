@@ -49,6 +49,13 @@ export interface IParticipant {
    * scripts/backfill-read-state.ts. Absent until the first read.
    */
   lastReadAt?: Date;
+  /**
+   * Up to when this participant's devices have received the conversation
+   * (CHAT-CONTRACT.md §5.1): the socket's DELIVERED, the list and messages
+   * GETs, and the read PUT move it, always with $max and timestamps off.
+   * Absent until the first delivery.
+   */
+  lastDeliveredAt?: Date;
 }
 
 interface ILatestMessageData {
@@ -129,6 +136,8 @@ const conversationSchema = new Schema<IConversation>(
         // No default and no index: absent means "never read here". It has to
         // be in the schema, or mongoose strips the read PUT's update.
         lastReadAt: Date,
+        // The same for "never delivered here" (CHAT-CONTRACT.md §5.1).
+        lastDeliveredAt: Date,
       },
     ],
     latestMessageData: {

@@ -8,6 +8,7 @@ import mongoose, { Types } from "mongoose";
 import { StaffRole } from "./helper";
 import { participantOf, userIdOf } from "@/utils/conversation-access";
 import { isReadFor, type ReadStateConversation } from "@/utils/read-state";
+import { deliverPage } from "@/services/delivered";
 
 /**
  * The caller's legacy MessageStatus verdict per message id: true for READ,
@@ -379,7 +380,8 @@ const getAllConversions = async (req: Request, res: Response): Promise<void> => 
 
     // isRead is the caller's: they sent the latest message, or their
     // participants[].lastReadAt covers it, or (groups) its MessageStatus row
-    // says READ. participants[].lastReadAt goes out as is (CHAT-CONTRACT.md §1.4).
+    // says READ. participants[].lastReadAt and lastDeliveredAt go out as they
+    // are (CHAT-CONTRACT.md §1.4, §5.1).
     const conversationData = conversations.map((conversation) => {
       if (conversation.latestMessageData) {
         const messageId = conversation.latestMessageData.messageId;
@@ -396,6 +398,12 @@ const getAllConversions = async (req: Request, res: Response): Promise<void> => 
     });
 
     const paginatedResults = conversationData.slice(skipNumber, skipNumber + limitNumber);
+
+    // The caller's devices now have this page: record it as delivered where
+    // the latest message from someone else was not yet (CHAT-CONTRACT.md
+    // §5.1). This is how old clients and www, which poll the list, deliver.
+    // Never fails the GET; the page shows the new participants[].lastDeliveredAt.
+    await deliverPage(paginatedResults, userId);
 
     res.status(200).json({
       code: messages.SUCCESSFULLY.code,

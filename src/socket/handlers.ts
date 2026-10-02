@@ -12,6 +12,7 @@ import {
   type SocketErrorCode,
 } from "./auth";
 import type { ReactionPush } from "@/services/chat-push";
+import { DELIVERED_INTERVAL_MS, clampUpTo, deliveryMoves, otherParticipants, type DeliveredConversation, type DeliveredNotice } from "@/utils/delivered";
 import type { ConversationMember } from "@/utils/conversation-access";
 import { isClientMessageType } from "@/utils/message-type";
 import {
@@ -92,10 +93,19 @@ export interface SocketDeps {
   ) => Promise<{ reactions?: StoredReaction[] | null } | null>;
   /** Tells a message's author about a new reaction through the backend; fire and forget (services/chat-push.ts). */
   pushReaction: (push: ReactionPush) => unknown;
+  /**
+   * DELIVERED's write: `at` as the caller's lastDeliveredAt ($max), resolving
+   * to the conversation as it was before, or null for a non-participant
+   * (services/delivered.ts).
+   */
+  writeDelivered: (conversationId: string, userId: string, at: Date) => Promise<DeliveredConversation | null>;
   /** STICKER_URL_PREFIX: where a STICKER's image must live (utils/sticker.ts). */
   stickerUrlPrefix: string;
   /** The clock for the throttles; Date.now unless a test passes one. */
   now?: () => number;
+  /** Timers for DELIVERED's deferred write; setTimeout / clearTimeout unless a test passes its own. */
+  setTimer?: (fn: () => void, ms: number) => unknown;
+  clearTimer?: (handle: unknown) => void;
 }
 
 /**
@@ -175,8 +185,15 @@ export const registerSocketHandlers = (io: Server, deps: SocketDeps): void => {
       });
     });
 
+    socket.on("DELIVERED", (data: unknown) => {
+      handleDelivered(socket, deps, data).catch((error) => {
+        console.error("DELIVERED failed", { socketId: socket.id, error: error instanceof Error ? error.message : error });
+      });
+    });
+
     socket.on("disconnect", () => {
       stopTyping(socket, deps);
+      flushDeliveredOnDisconnect(socket, deps);
       const { roomUserId, partners } = dataOf(socket);
       // Only SETUP records a socketId on the user, so a socket that never
       // set up has nothing to mark offline.
@@ -436,6 +453,59 @@ const typingEntriesOf = (socket: Socket): Map<string, TypingEntry> => {
 };
 
 /**
+ * The socket's cached membership of a conversation, with the other
+ * participants (socket/typing.ts): looked up at most every 10 minutes (a
+ * refusal every minute), shared by TYPING and DELIVERED. Events that arrive
+ * during a lookup wait for that one lookup, then go on in the order they
+ * came. Null when the lookup failed: the event is dropped, quietly, and the
+ * next one tries again.
+ */
+const memberEntry = async (
+  socket: Socket,
+  deps: SocketDeps,
+  event: string,
+  conversationId: string,
+  userId: string
+): Promise<TypingEntry | null> => {
+  const now = deps.now ?? Date.now;
+  const entries = typingEntriesOf(socket);
+  let entry = entries.get(conversationId);
+  if (!entry) {
+    makeRoomForTyping(entries);
+    entry = newTypingEntry();
+    entries.set(conversationId, entry);
+  }
+
+  if (!entry.pending && membershipExpired(entry, now())) {
+    const checking = entry;
+    checking.pending = deps
+      .membersOf(conversationId, userId)
+      .then(
+        (members) => {
+          checking.member = members !== null;
+          checking.others = (members ?? []).map((member) => member.userId).filter((id) => id !== userId);
+          checking.checkedAt = now();
+          return true;
+        },
+        (error) => {
+          console.error("membership lookup failed", {
+            event,
+            socketId: socket.id,
+            conversationId,
+            error: error instanceof Error ? error.message : error,
+          });
+          return false;
+        }
+      )
+      .finally(() => {
+        checking.pending = undefined;
+      });
+  }
+  if (entry.pending && !(await entry.pending)) return null;
+  return entry;
+};
+
+/**
  * TYPING { conversationId, typing } (CHAT-CONTRACT.md §4.1): relayed to the
  * conversation's other participants, nothing written anywhere.
  *
@@ -464,44 +534,8 @@ const handleTyping = async (socket: Socket, deps: SocketDeps, raw: unknown): Pro
   }
 
   const now = deps.now ?? Date.now;
-  const entries = typingEntriesOf(socket);
-  let entry = entries.get(conversationId);
-  if (!entry) {
-    makeRoomForTyping(entries);
-    entry = newTypingEntry();
-    entries.set(conversationId, entry);
-  }
-
-  if (!entry.pending && membershipExpired(entry, now())) {
-    const checking = entry;
-    checking.pending = deps
-      .membersOf(conversationId, actor.userId)
-      .then(
-        (members) => {
-          checking.member = members !== null;
-          checking.others = (members ?? []).map((member) => member.userId).filter((id) => id !== actor.userId);
-          checking.checkedAt = now();
-          return true;
-        },
-        (error) => {
-          // Typing is a nicety: a failed lookup drops the events waiting on
-          // it, quietly, and the next event tries again.
-          console.error("TYPING membership lookup failed", {
-            socketId: socket.id,
-            conversationId,
-            error: error instanceof Error ? error.message : error,
-          });
-          return false;
-        }
-      )
-      .finally(() => {
-        checking.pending = undefined;
-      });
-  }
-  // Events that arrive while the lookup runs wait for that one lookup, and
-  // then go on in the order they came.
-  if (entry.pending && !(await entry.pending)) return;
-
+  const entry = await memberEntry(socket, deps, event, conversationId, actor.userId);
+  if (!entry) return;
   if (!entry.member) {
     refuse(socket, event, "NOT_PARTICIPANT", { conversationId });
     return;
@@ -538,4 +572,137 @@ const stopTyping = (socket: Socket, deps: SocketDeps): void => {
       console.error("TYPING stop failed", { socketId: socket.id, error: error instanceof Error ? error.message : error });
     }
   }
+};
+
+/** One socket's DELIVERED state for one conversation: when it last wrote, and the upTo waiting for the next write. */
+interface DeliveredState {
+  lastWriteAt: number | null;
+  pendingUpTo?: Date;
+  timer?: unknown;
+  userId: string;
+}
+
+/** DELIVERED states a socket keeps before idle ones are forgotten. */
+const MAX_DELIVERED_STATES = 100;
+
+const deliveredStatesOf = (socket: Socket): Map<string, DeliveredState> => {
+  const data = dataOf(socket);
+  if (!(data.delivered instanceof Map)) data.delivered = new Map();
+  return data.delivered;
+};
+
+const later = (a: Date | undefined, b: Date): Date => (a && a.getTime() > b.getTime() ? a : b);
+
+/**
+ * DELIVERED { conversationId, upTo? } (CHAT-CONTRACT.md §5.1): a new client
+ * sends it when a NEW_MESSAGE from someone else reaches its socket. The
+ * caller's `participants[].lastDeliveredAt` moves to `upTo` (a valid date no
+ * later than now; anything else is now), never back.
+ *
+ * - An authenticated socket only (AUTH_REQUIRED otherwise).
+ * - `conversationId` an ObjectId, else ERROR INVALID_PAYLOAD.
+ * - Membership from the socket's cache, shared with TYPING; not a
+ *   participant: ERROR NOT_PARTICIPANT.
+ * - At most one write per 2 s per conversation per socket. One that comes
+ *   sooner is not lost: the latest upTo waits and is written when the 2 s are
+ *   up (or when the socket disconnects).
+ *
+ * When the write moves the mark past the latest message from someone else,
+ * DELIVERED goes to the other participants (deliverDelivered).
+ */
+const handleDelivered = async (socket: Socket, deps: SocketDeps, raw: unknown): Promise<void> => {
+  const event = "DELIVERED";
+  const actor = verifiedActorFor(socket, event, deps.mode, deps.now);
+  if (!actor) return;
+
+  const data = (raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {}) as Record<string, unknown>;
+  const conversationId = data.conversationId;
+  if (!isObjectId(conversationId)) {
+    refuse(socket, event, "INVALID_PAYLOAD", {
+      conversationId: typeof conversationId === "string" ? conversationId.slice(0, 64) : null,
+    });
+    return;
+  }
+  const now = deps.now ?? Date.now;
+  const upTo = clampUpTo(data.upTo, new Date(now()));
+
+  const entry = await memberEntry(socket, deps, event, conversationId, actor.userId);
+  if (!entry) return;
+  if (!entry.member) {
+    refuse(socket, event, "NOT_PARTICIPANT", { conversationId });
+    return;
+  }
+
+  const states = deliveredStatesOf(socket);
+  let state = states.get(conversationId);
+  if (!state) {
+    if (states.size >= MAX_DELIVERED_STATES) {
+      for (const [id, idle] of states) {
+        if (states.size < MAX_DELIVERED_STATES) break;
+        if (idle.timer === undefined) states.delete(id);
+      }
+    }
+    state = { lastWriteAt: null, userId: actor.userId };
+    states.set(conversationId, state);
+  }
+
+  // A write is already waiting: this upTo joins it.
+  if (state.timer !== undefined) {
+    state.pendingUpTo = later(state.pendingUpTo, upTo);
+    return;
+  }
+  const wait = state.lastWriteAt === null ? 0 : state.lastWriteAt + DELIVERED_INTERVAL_MS - now();
+  if (wait > 0) {
+    const waiting = state;
+    waiting.pendingUpTo = later(waiting.pendingUpTo, upTo);
+    waiting.timer = (deps.setTimer ?? setTimeout)(() => {
+      waiting.timer = undefined;
+      flushDelivered(socket, deps, conversationId, waiting);
+    }, wait);
+    return;
+  }
+  await writeDeliveredMark(socket, deps, conversationId, state, upTo);
+};
+
+const writeDeliveredMark = async (
+  socket: Socket,
+  deps: SocketDeps,
+  conversationId: string,
+  state: DeliveredState,
+  upTo: Date
+): Promise<void> => {
+  state.lastWriteAt = (deps.now ?? Date.now)();
+  const before = await deps.writeDelivered(conversationId, state.userId, upTo);
+  if (!before || !deliveryMoves(before, state.userId, upTo)) return;
+  const notice: DeliveredNotice = {
+    userIds: otherParticipants(before, state.userId),
+    conversationId,
+    userId: state.userId,
+    deliveredAt: upTo.toISOString(),
+  };
+  if (notice.userIds.length === 0) return;
+  await deps.publish("DELIVERED", JSON.stringify(notice));
+};
+
+/** Writes the upTo that was waiting, if any; never throws. */
+const flushDelivered = (socket: Socket, deps: SocketDeps, conversationId: string, state: DeliveredState): void => {
+  const upTo = state.pendingUpTo;
+  state.pendingUpTo = undefined;
+  if (!upTo) return;
+  writeDeliveredMark(socket, deps, conversationId, state, upTo).catch((error) => {
+    console.error("DELIVERED write failed", { socketId: socket.id, conversationId, error: error instanceof Error ? error.message : error });
+  });
+};
+
+/** On disconnect, a waiting upTo is written now rather than dropped: the messages did reach this device. */
+const flushDeliveredOnDisconnect = (socket: Socket, deps: SocketDeps): void => {
+  const states = dataOf(socket).delivered;
+  if (!states) return;
+  for (const [conversationId, state] of states) {
+    if (state.timer === undefined) continue;
+    (deps.clearTimer ?? ((handle: unknown) => clearTimeout(handle as NodeJS.Timeout)))(state.timer);
+    state.timer = undefined;
+    flushDelivered(socket, deps, conversationId, state);
+  }
+  states.clear();
 };

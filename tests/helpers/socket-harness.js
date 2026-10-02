@@ -1,7 +1,7 @@
 /**
  * A real socket.io server and clients around registerSocketHandlers, with
  * Redis and Mongo replaced through SocketDeps (the harness socket-auth.test.js
- * has inline, shared here by the reply, reaction and typing tests).
+ * has inline, shared here by the reply, reaction, typing and delivered tests).
  *
  * - `publish` records what would go on Redis and does what the Redis
  *   subscribers in config/redis.ts do with it on this instance.
@@ -111,6 +111,7 @@ async function startServer({ mode = "permissive", deps = {} } = {}) {
       if (channel === "SETUP") rooms.joinSetupRooms(io, parsed);
       if (channel === "REACTION" && rooms.deliverReaction) rooms.deliverReaction(io, parsed);
       if (channel === "TYPING" && rooms.deliverTyping) rooms.deliverTyping(io, parsed);
+      if (channel === "DELIVERED" && rooms.deliverDelivered) rooms.deliverDelivered(io, parsed);
     },
     isParticipant: async (conversationId, userId) => (members.get(conversationId) ?? []).some((m) => m.userId === userId),
     conversationPartners: async () => [],

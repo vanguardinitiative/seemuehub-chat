@@ -35,8 +35,13 @@ export interface SocketData {
   partners?: string[];
   /** When this socket's recent REACT_MESSAGEs were accepted, for the rate limit. */
   reactionTimes?: number[];
-  /** TYPING state per conversationId (socket/typing.ts): membership, throttle, and what was last said. */
+  /**
+   * Per conversationId (socket/typing.ts): the cached membership TYPING and
+   * DELIVERED share, and TYPING's throttle and last state.
+   */
   typing?: Map<string, TypingEntry>;
+  /** DELIVERED's throttle per conversationId (socket/handlers.ts). */
+  delivered?: Map<string, { lastWriteAt: number | null; pendingUpTo?: Date; timer?: unknown; userId: string }>;
 }
 
 export const dataOf = (socket: Socket): SocketData => socket.data as SocketData;

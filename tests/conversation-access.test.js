@@ -10,6 +10,11 @@
  * the database. If an unauthenticated request ever gets far enough to query, it
  * hangs here instead of returning — a visible failure rather than a silent leak.
  */
+// GET /conversations records deliveries and publishes DELIVERED, so the
+// conversation controller now loads config/redis: replace it (and set the env
+// it needs) before anything is required. See tests/helpers/offline.js.
+require("./helpers/offline");
+
 const test = require("node:test");
 const assert = require("node:assert");
 const http = require("node:http");

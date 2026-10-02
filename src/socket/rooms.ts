@@ -139,6 +139,29 @@ export const deliverTyping = (io: Server, notice: TypingNotice): void => {
   });
 };
 
+/** What a delivery publishes on Redis `DELIVERED` (CHAT-CONTRACT.md §5.1). */
+export interface DeliveredNotice {
+  userIds?: unknown;
+  conversationId?: unknown;
+  userId?: unknown;
+  deliveredAt?: unknown;
+}
+
+/**
+ * DELIVERED goes to the other participants (the senders, who draw ✓✓), never
+ * to the recipient's own room: the publisher left them out, and they are
+ * dropped here again.
+ */
+export const deliverDelivered = (io: Server, notice: DeliveredNotice): void => {
+  const rooms = userRooms(notice?.userIds).filter((room) => room !== notice.userId);
+  // Never io.to([]): socket.io treats an empty room list as "everyone".
+  if (rooms.length === 0) return;
+  io.to(rooms).emit("CONVERSATION_LISTENING", {
+    type: "DELIVERED",
+    response: { conversationId: notice.conversationId, userId: notice.userId, deliveredAt: notice.deliveredAt ?? null },
+  });
+};
+
 export interface PaymentEvent {
   type: "PAYMENT";
   response: unknown;
