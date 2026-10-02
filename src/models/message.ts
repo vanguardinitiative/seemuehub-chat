@@ -25,6 +25,31 @@ interface IAttachment {
   originalName: string;
 }
 
+/**
+ * What a reply shows of the message it answers (CHAT-CONTRACT.md §2.1). Built
+ * by the service from the stored target when the reply is sent (see
+ * utils/reply.ts), never taken from a client, so it stays as it was even if
+ * the target is later deleted.
+ */
+export interface IReplyPreview {
+  messageId: mongoose.Types.ObjectId;
+  senderId: string;
+  messageType: string;
+  /** TEXT: the content, clipped to 160 characters. Every other type: "". */
+  text: string;
+  /** FILE: the attachment's originalName, or its fileName. */
+  fileName?: string;
+  /** IMAGE: the attachment's fileUrl. STICKER: the sticker's url. */
+  thumbUrl?: string;
+}
+
+/** One person's reaction (CHAT-CONTRACT.md §3.2): at most one per user per message. */
+export interface IReaction {
+  user: mongoose.Types.ObjectId;
+  emoji: string;
+  at: Date;
+}
+
 enum MessageType {
   TEXT = "TEXT",
   IMAGE = "IMAGE",
@@ -77,6 +102,8 @@ export interface IMessage extends Document {
   sendAt: Date;
   isReply: boolean;
   replyTo?: mongoose.Types.ObjectId;
+  replyPreview?: IReplyPreview;
+  reactions?: IReaction[];
   deliveredAllAt?: Date;
   readAllAt?: Date;
   // Order-related fields
@@ -139,6 +166,37 @@ const messageSchema = new Schema<IMessage>(
     },
     isReply: { type: Boolean, default: false },
     replyTo: { type: Schema.Types.ObjectId, ref: "Message" },
+    // Both absent unless set, so a message without them is stored as before.
+    // No length validators: a failed validation would fail the send, so the
+    // limits are applied where the preview is built (utils/reply.ts).
+    replyPreview: {
+      type: new Schema(
+        {
+          messageId: { type: Schema.Types.ObjectId, ref: "Message" },
+          senderId: String,
+          messageType: String,
+          text: String,
+          fileName: String,
+          thumbUrl: String,
+        },
+        { _id: false }
+      ),
+      default: undefined,
+    },
+    // Written only by REACT_MESSAGE's pipeline update (services/reactions.ts).
+    reactions: {
+      type: [
+        new Schema(
+          {
+            user: { type: Schema.Types.ObjectId, ref: "User" },
+            emoji: String,
+            at: Date,
+          },
+          { _id: false }
+        ),
+      ],
+      default: undefined,
+    },
     deliveredAllAt: Date,
     readAllAt: Date,
     // Order-related fields

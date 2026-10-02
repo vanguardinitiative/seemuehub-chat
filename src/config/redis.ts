@@ -7,12 +7,18 @@ import { userModel } from "@/models/user";
 import { env } from "./env";
 import { describeRedisConfig } from "./redis-log";
 import {
+  deliverDelivered,
   deliverPayment,
+  deliverReaction,
   deliverReadMessage,
+  deliverTyping,
   emitPresence,
   joinSetupRooms,
   routePayment,
+  type DeliveredNotice,
+  type ReactionNotice,
   type ReadMessageNotice,
+  type TypingNotice,
 } from "@/socket/rooms";
 
 // Redis configuration matching seemuehub-backend style
@@ -180,6 +186,37 @@ const subscribeToClient = async (io: Server): Promise<void> => {
         deliverReadMessage(io, JSON.parse(message) as ReadMessageNotice);
       } catch (error) {
         console.error("Error processing READ_MESSAGE:", error instanceof Error ? error.message : error);
+      }
+    });
+
+    sub.subscribe("REACTION", async (message: string) => {
+      try {
+        // Published by REACT_MESSAGE (src/socket/handlers.ts) after its write:
+        // every participant, the reactor included. See deliverReaction.
+        deliverReaction(io, JSON.parse(message) as ReactionNotice);
+      } catch (error) {
+        console.error("Error processing REACTION:", error instanceof Error ? error.message : error);
+      }
+    });
+
+    sub.subscribe("TYPING", async (message: string) => {
+      try {
+        // Published by TYPING and on disconnect (src/socket/handlers.ts): the
+        // other participants only. See deliverTyping.
+        deliverTyping(io, JSON.parse(message) as TypingNotice);
+      } catch (error) {
+        console.error("Error processing TYPING:", error instanceof Error ? error.message : error);
+      }
+    });
+
+    sub.subscribe("DELIVERED", async (message: string) => {
+      try {
+        // Published when a recipient's lastDeliveredAt moves past the latest
+        // message (the socket's DELIVERED, the list and messages GETs, the
+        // read PUT): the other participants only. See deliverDelivered.
+        deliverDelivered(io, JSON.parse(message) as DeliveredNotice);
+      } catch (error) {
+        console.error("Error processing DELIVERED:", error instanceof Error ? error.message : error);
       }
     });
 

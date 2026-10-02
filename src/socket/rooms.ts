@@ -83,6 +83,85 @@ export const deliverReadMessage = (io: Server, notice: ReadMessageNotice): void 
   io.to(rooms).emit("CONVERSATION_LISTENING", payload);
 };
 
+/** The user rooms a notice names: strings only, no repeats. */
+const userRooms = (userIds: unknown): string[] =>
+  Array.isArray(userIds)
+    ? [...new Set(userIds.filter((room): room is string => typeof room === "string" && room.length > 0))]
+    : [];
+
+/** What REACT_MESSAGE publishes on Redis `REACTION` (CHAT-CONTRACT.md §3.4). */
+export interface ReactionNotice {
+  userIds?: unknown;
+  conversationId?: unknown;
+  messageId?: unknown;
+  reactions?: unknown;
+}
+
+/**
+ * REACTION goes to every participant's room, the reactor's included (their
+ * other devices). `reactions` is the message's whole list as stored after
+ * the write (`user` a string, `at` ISO); clients replace theirs with it.
+ */
+export const deliverReaction = (io: Server, notice: ReactionNotice): void => {
+  const rooms = userRooms(notice?.userIds);
+  // Never io.to([]): socket.io treats an empty room list as "everyone".
+  if (rooms.length === 0) return;
+  io.to(rooms).emit("CONVERSATION_LISTENING", {
+    type: "REACTION",
+    response: {
+      conversationId: notice.conversationId,
+      messageId: notice.messageId,
+      reactions: Array.isArray(notice.reactions) ? notice.reactions : [],
+    },
+  });
+};
+
+/** What TYPING publishes on Redis `TYPING` (CHAT-CONTRACT.md §4.1). */
+export interface TypingNotice {
+  userIds?: unknown;
+  conversationId?: unknown;
+  userId?: unknown;
+  typing?: unknown;
+}
+
+/**
+ * TYPING goes to the other participants' rooms only: the publisher already
+ * left the typer out, and the typer's own room is dropped here again, so
+ * their other devices never show their own dots.
+ */
+export const deliverTyping = (io: Server, notice: TypingNotice): void => {
+  const rooms = userRooms(notice?.userIds).filter((room) => room !== notice.userId);
+  // Never io.to([]): socket.io treats an empty room list as "everyone".
+  if (rooms.length === 0) return;
+  io.to(rooms).emit("CONVERSATION_LISTENING", {
+    type: "TYPING",
+    response: { conversationId: notice.conversationId, userId: notice.userId, typing: notice.typing === true },
+  });
+};
+
+/** What a delivery publishes on Redis `DELIVERED` (CHAT-CONTRACT.md §5.1). */
+export interface DeliveredNotice {
+  userIds?: unknown;
+  conversationId?: unknown;
+  userId?: unknown;
+  deliveredAt?: unknown;
+}
+
+/**
+ * DELIVERED goes to the other participants (the senders, who draw ✓✓), never
+ * to the recipient's own room: the publisher left them out, and they are
+ * dropped here again.
+ */
+export const deliverDelivered = (io: Server, notice: DeliveredNotice): void => {
+  const rooms = userRooms(notice?.userIds).filter((room) => room !== notice.userId);
+  // Never io.to([]): socket.io treats an empty room list as "everyone".
+  if (rooms.length === 0) return;
+  io.to(rooms).emit("CONVERSATION_LISTENING", {
+    type: "DELIVERED",
+    response: { conversationId: notice.conversationId, userId: notice.userId, deliveredAt: notice.deliveredAt ?? null },
+  });
+};
+
 export interface PaymentEvent {
   type: "PAYMENT";
   response: unknown;

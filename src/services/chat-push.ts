@@ -2,9 +2,10 @@ import axios from "axios";
 import { Types } from "mongoose";
 import { env } from "@/config/env";
 import { isClientMessageType } from "@/utils/message-type";
+import { isReaction } from "@/utils/reactions";
 
 /**
- * New-message pushes, through seemuehub-backend.
+ * New-message and reaction pushes, through seemuehub-backend.
  *
  * The backend owns the users' device tokens, so when a message is stored this
  * service asks it to push: `POST {BACKEND_URL}/api/v1/internal/push/chat`
@@ -98,6 +99,41 @@ export const chatPushBodies = (conversation: PushConversation | null | undefined
   return bodies;
 };
 
+/** The `messageType` of a reaction push (CHAT-CONTRACT.md §3.5): the backend words it "reacted {emoji}". */
+export const REACTION_PUSH_TYPE = "REACTION";
+
+/** A reaction to tell a message's author about (REACT_MESSAGE, socket/handlers.ts). */
+export interface ReactionPush {
+  conversationId: string;
+  /** The message's sender: the one pushed to. */
+  authorId: unknown;
+  reactorId: string;
+  emoji: string;
+  /** The conversation's participants, with whether each muted it (utils/conversation-access.ts membersOf). */
+  members: { userId: string; isMuted: boolean }[];
+}
+
+/**
+ * The request body for a reaction, or null when nobody is to be told. Pure.
+ *
+ * The author only, and only when they are someone else, still a participant,
+ * and have not muted the conversation (the rule message pushes follow), and
+ * the emoji is one of the six. `snippet` is the emoji. Whether this reaction
+ * is new (added or changed, not removed or the same again) is the caller's
+ * to decide.
+ */
+export const reactionPushBody = (push: ReactionPush | null | undefined): ChatPushBody | null => {
+  if (!push) return null;
+  const conversationId = idOf(push.conversationId);
+  const authorId = idOf(push.authorId);
+  const reactorId = idOf(push.reactorId);
+  if (!conversationId || !authorId || !reactorId || authorId === reactorId) return null;
+  if (!isReaction(push.emoji)) return null;
+  const author = (push.members ?? []).find((member) => member?.userId === authorId);
+  if (!author || author.isMuted) return null;
+  return { conversationId, senderId: reactorId, recipientIds: [authorId], messageType: REACTION_PUSH_TYPE, snippet: push.emoji };
+};
+
 export interface ChatPushDeps {
   /** Read per call: the configuration as it is now. */
   config: () => { backendUrl?: string; internalKey?: string };
@@ -117,12 +153,26 @@ export const pushChatMessage = async (
   conversation: PushConversation | null | undefined,
   message: PushMessage | null | undefined,
   deps: ChatPushDeps = defaultDeps
-): Promise<void> => {
+): Promise<void> => postChatPushes(() => chatPushBodies(conversation, message), deps);
+
+/**
+ * Ask the backend to tell a message's author that someone reacted to it
+ * (CHAT-CONTRACT.md §3.5). Same terms as pushChatMessage: fire and forget,
+ * never rejects, nothing without BACKEND_URL and CHAT_INTERNAL_KEY.
+ */
+export const pushReaction = async (push: ReactionPush, deps: ChatPushDeps = defaultDeps): Promise<void> =>
+  postChatPushes(() => {
+    const body = reactionPushBody(push);
+    return body ? [body] : [];
+  }, deps);
+
+/** Posts the bodies `build` returns; swallows and logs every failure, its own included. */
+const postChatPushes = async (build: () => ChatPushBody[], deps: ChatPushDeps): Promise<void> => {
   try {
     const { backendUrl, internalKey } = deps.config();
     if (!backendUrl || !internalKey) return;
 
-    const bodies = chatPushBodies(conversation, message);
+    const bodies = build();
     if (bodies.length === 0) return;
 
     const url = `${backendUrl.replace(/\/+$/, "")}${CHAT_PUSH_PATH}`;

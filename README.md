@@ -69,8 +69,11 @@ A socket that sends no token at all is a **legacy** socket (see
 | Event | Payload | Notes |
 | --- | --- | --- |
 | `SETUP` | `{ userId?, conversationId? }` | Joins the caller's room, which is where their messages, orders and payments arrive. `userId` is ignored for an authenticated socket (a mismatch is logged). `conversationId` also joins that conversation's room (`NEW_MESSAGE_PAGE`) if the caller is a participant. Emit after every `connect`. |
-| `NEW_MESSAGE` | `{ _id?, conversationId?, receiverId, messageType, content, attachments?, ... }` | `senderId` is the caller whatever the payload says. With `conversationId` the caller must be a participant; without it, the private conversation between caller and `receiverId` is found or created. |
-| `NEW_GROUP_MESSAGE` | `{ _id?, conversationId, messageType, content, ... }` | The caller must already be a participant. |
+| `NEW_MESSAGE` | `{ _id?, conversationId?, receiverId, messageType, content, attachments?, replyTo?, ... }` | `senderId` is the caller whatever the payload says. With `conversationId` the caller must be a participant; without it, the private conversation between caller and `receiverId` is found or created. `replyTo` makes it a [reply](#replies). |
+| `NEW_GROUP_MESSAGE` | `{ _id?, conversationId, messageType, content, replyTo?, ... }` | The caller must already be a participant. |
+| `REACT_MESSAGE` | `{ messageId, emoji }` | Sets the caller's [reaction](#reactions); `emoji: null` removes it. Authenticated sockets only. |
+| `TYPING` | `{ conversationId, typing }` | The [typing indicator](#typing), relayed to the other participants. Authenticated sockets only. |
+| `DELIVERED` | `{ conversationId, upTo? }` | This device has the conversation's messages up to `upTo` (ISO; default now): the [delivered state](#delivered-state). Send it when a `NEW_MESSAGE` from someone else arrives. Authenticated sockets only. |
 
 `messageType` must be one a client may send: `TEXT`, `IMAGE`, `VIDEO`,
 `VOICE`, `FILE`, `REACTION`, `STICKER`, `LOCATION`, `VOICE_CALL`,
@@ -83,7 +86,8 @@ render as order events) and are refused with `ERROR` `INVALID_PAYLOAD`,
 Fields a client cannot set on a message: `sender`, `actorUserId`,
 `sendAsOrganizationId`, `isOrderMessage`, `orderId`, `orderStatus`,
 `orderAction`, `isDeleted`, `deletedAt`, `deletedBy`, `deliveredAllAt`,
-`readAllAt`. They are dropped.
+`readAllAt`, `replyPreview`, `reactions`. They are dropped. `isReply` is
+always the service's own verdict on `replyTo`.
 
 ### Stickers
 
@@ -109,6 +113,72 @@ say "Sticker". Conversations whose latest message predates it, and the ones
 seemuehub-backend writes itself, have none: treat a missing `messageType`
 with `content: "STICKER"` as a sticker.
 
+### Replies
+
+A client makes a message a reply by adding `replyTo: "<messageId>"` to
+`NEW_MESSAGE` / `NEW_GROUP_MESSAGE` (`worktrees/CHAT-CONTRACT.md` §2). Once
+the send has resolved its conversation, the target must exist in that same
+conversation and be neither deleted nor an order message. Then the message
+is stored with `isReply: true`, `replyTo`, and a `replyPreview` the service
+builds from the stored target (`src/utils/reply.ts`):
+
+```js
+replyPreview: {
+  messageId, senderId, messageType,
+  text,       // TEXT: the content, at most 160 UTF-16 units, never cut inside a character; other types: ""
+  fileName?,  // FILE: the attachment's originalName, else its fileName
+  thumbUrl?,  // IMAGE: the attachment's fileUrl; STICKER: the sticker's url (its attachment)
+}
+```
+
+Any other `replyTo` (not an id, missing, another conversation, deleted, an
+order message) is dropped and the message is delivered as a normal one, with
+a `{"msg":"reply_dropped","reason":...}` line. The preview is a copy: it stays
+as it was if the target is later deleted. The REST sends ignore `replyTo`.
+Old clients see a normal message.
+
+### Reactions
+
+One reaction per person per message, from a fixed set of six, in this order
+everywhere: 👍 ❤️ 😂 😮 😢 🙏 (exact strings; ❤️ is U+2764 U+FE0F)
+(`worktrees/CHAT-CONTRACT.md` §3).
+
+`REACT_MESSAGE { messageId, emoji }` sets the caller's reaction (`null`
+removes it; the same emoji again just replaces it, so toggling is the
+client's: send `null`). Refusals are `ERROR { code, event: "REACT_MESSAGE",
+messageId }`:
+
+| `code` | When |
+| --- | --- |
+| `RATE_LIMITED` | more than 10 `REACT_MESSAGE` in 10 s from this socket (counted first, refused ones included) |
+| `INVALID_PAYLOAD` | `field: "messageId"`: not an id, or a deleted, order, `SYSTEM` or `ORDER_*` message; `field: "emoji"`: not `null` nor one of the six |
+| `NOT_PARTICIPANT` | the caller is not in the message's conversation, or the message does not exist (the same answer, so ids cannot be probed) |
+| `AUTH_REQUIRED` | a legacy (tokenless) socket, in either mode |
+
+The write is one pipeline update with timestamps off
+(`src/services/reactions.ts`): it never touches the message's `updatedAt`,
+the conversation, `latestMessageData`, `readAllAt` or anyone's unread state.
+Then every participant's room, the reactor's included (their other devices),
+gets `CONVERSATION_LISTENING` `REACTION` with the message's whole list;
+clients replace theirs with it.
+
+When the reaction is new from someone else (added, or changed to another
+emoji; not removed, not the same again), the message's author gets a push
+(see [Push notifications](#push-notifications)).
+
+### Typing
+
+`TYPING { conversationId, typing }` (`worktrees/CHAT-CONTRACT.md` §4) goes to
+the conversation's other participants as `CONVERSATION_LISTENING` `TYPING`,
+never to the typer's own devices. Nothing is written. Membership is looked
+up once per socket and kept for 10 minutes, with the other participants (a
+refusal for a minute). At most one is forwarded per second per conversation
+per socket; the rest are dropped silently, except a `typing: false` after a
+forwarded `true`, which always goes. When a socket disconnects, it sends
+`typing: false` wherever it last said `true`. `ERROR` `INVALID_PAYLOAD`
+(not an id, or `typing` not a boolean), `NOT_PARTICIPANT` or
+`AUTH_REQUIRED` (legacy socket) answer the rest.
+
 ### Server → client
 
 | Event | `type` | `response` | Sent to |
@@ -118,18 +188,25 @@ with `content: "STICKER"` as a sticker.
 | `CONVERSATION_LISTENING` | `READ_MESSAGE` | the conversationId, with `readerId`, `readAt`, `readAllAt` beside it (see [Read state](#read-state)) | the reader, and the latest sender when that read made it read by all |
 | `CONVERSATION_LISTENING` | `ORDER` | the order conversation from the backend, with `latestMessageData` and `updatedAt` as stored after the step (the step's own message) | participants |
 | `CONVERSATION_LISTENING` | `USER_ONLINE` | `{ userId, isOnline }` | users who share a conversation with `userId` (as of that user's SETUP) |
+| `CONVERSATION_LISTENING` | `REACTION` | `{ conversationId, messageId, reactions: [{ user, emoji, at }] }`, the message's whole list (`at` ISO) | every participant, the reactor included |
+| `CONVERSATION_LISTENING` | `TYPING` | `{ conversationId, userId, typing }` | the other participants (never the typer) |
+| `CONVERSATION_LISTENING` | `DELIVERED` | `{ conversationId, userId, deliveredAt }`: `userId`'s devices have everything up to `deliveredAt` (ISO) | the other participants (never `userId`), see [Delivered state](#delivered-state) |
 | `LISTENING` | `PAYMENT` | the payment (`_id, userId, type, status, amount, subtotalAmount, processingFeeAmount, currency, referenceId, ...`) | the payer's room |
-| `ERROR` | | `{ code, message, event, conversationId?, _id? }` | the socket that caused it |
+| `ERROR` | | `{ code, message, event, conversationId?, _id?, messageId?, field? }` | the socket that caused it |
+
+`REACTION`, `TYPING` and `DELIVERED` are new; clients that do not know a
+`type` ignore it (the app's and both webs' handlers drop unknown types).
 
 `ERROR` codes:
 
 | `code` | Meaning |
 | --- | --- |
-| `AUTH_REQUIRED` | Legacy socket in `enforce` mode: reconnect with `auth: { token }` |
+| `AUTH_REQUIRED` | Legacy socket in `enforce` mode, or any legacy socket sending `REACT_MESSAGE`, `TYPING` or `DELIVERED`: reconnect with `auth: { token }` |
 | `TOKEN_EXPIRED` | The connection's token has expired since it connected: refresh, reconnect, retry |
-| `NOT_PARTICIPANT` | Not a participant of `conversationId`; nothing was stored or joined |
+| `NOT_PARTICIPANT` | Not a participant of `conversationId` (or, for `REACT_MESSAGE`, of the message's conversation); nothing was stored, joined or sent |
 | `INVALID_PAYLOAD` | The payload was not an object, or (`field: "messageType"`) its `messageType` is missing or not one a client may send, or (`field: "attachments"`) a `STICKER` failed the [sticker check](#stickers); `_id` echoes the client's id |
 | `MESSAGE_SEND_FAILED` | Storing the message failed (`message` says why); `_id` echoes the client's id |
+| `RATE_LIMITED` | More than 10 `REACT_MESSAGE` in 10 s from this socket; `messageId` echoes the client's |
 
 ### Resending a message
 
@@ -155,6 +232,10 @@ What a legacy (tokenless) socket may do:
   ```
 
   `event` is `connect`, `SETUP`, `NEW_MESSAGE` or `NEW_GROUP_MESSAGE`.
+  `REACT_MESSAGE`, `TYPING` and `DELIVERED` carry no identity to trust, so
+  a legacy socket gets `AUTH_REQUIRED` for them in this mode too (logged with
+  `"action":"refused"`); no client that predates authenticated sockets sends
+  them.
   `claimedUserId` is null for a signed-out visitor (the donate page), so count
   distinct non-null `claimedUserId` on `SETUP` lines to measure the signed-in
   clients still on the old protocol.
@@ -193,7 +274,12 @@ code), `setup_user_mismatch` (an authenticated SETUP named another userId),
 `sender_override` (an authenticated message named another senderId),
 `message_refused` (NOT_PARTICIPANT, or INVALID_PAYLOAD with
 `field: "messageType"`, or with `field: "attachments"` and a `reason` of
-`ATTACHMENT_COUNT`, `FILE_URL` or `FILE_NAME` for a sticker).
+`ATTACHMENT_COUNT`, `FILE_URL` or `FILE_NAME` for a sticker), `reply_dropped`
+(a `replyTo` that was dropped, with a `reason` of `INVALID_ID`, `NOT_FOUND`,
+`OTHER_CONVERSATION`, `DELETED` or `ORDER_MESSAGE`), `reaction_refused` (a
+refused `REACT_MESSAGE`, with its `code` and `reason`),
+`delivered_write_failed` (a GET's delivered write failed; the GET still
+answered).
 
 ## Order conversations
 
@@ -259,7 +345,8 @@ token's user):
 - moves the caller's `lastReadAt` to now (never back), for a participant
   only: anyone else gets the same 404 as a conversation that does not exist.
   Every type works, including an order step posted by an admin who is not a
-  participant;
+  participant. The same update moves `lastDeliveredAt` too (reading also
+  delivers: see [Delivered state](#delivered-state));
 - in a GROUP, also marks the caller's `MessageStatus` rows READ, as before;
 - when everyone but the latest sender has now read the latest message, sets
   `latestMessageData.readAllAt` (and `readAllAt` on the earlier messages from
@@ -299,6 +386,32 @@ sudo docker exec seemuehub-chat node dist/scripts/backfill-read-state.js        
 sudo docker exec seemuehub-chat node dist/scripts/backfill-read-state.js --apply  # writes; only with the owner's OK
 ```
 
+## Delivered state
+
+For WhatsApp's three ticks (✓ sent, grey ✓✓ delivered, blue ✓✓ read), the
+conversation also keeps `participants[].lastDeliveredAt`: that participant's
+devices have every message sent at or before it (`worktrees/CHAT-CONTRACT.md`
+§5.1). Like `lastReadAt` it only moves forward (`$max` on the caller's own
+entry) and never touches `updatedAt`. It moves from:
+
+| Trigger | To | Notes |
+| --- | --- | --- |
+| socket `DELIVERED { conversationId, upTo? }` | `upTo` (no later than now; not a date: now) | Membership from the socket's cache (shared with `TYPING`). At most one write per 2 s per conversation per socket; one sent sooner waits, keeping the latest `upTo`, and is written when the 2 s are up (or when the socket disconnects) |
+| `GET /conversations` | now | One `updateMany` for the conversations on the returned page whose latest message is from someone else and not yet delivered to the caller; no write when there are none. Old clients and www deliver this way |
+| `GET /messages?conversationId=` | now | The same for that conversation |
+| `PUT /message-status/read` | now | In the read's own update |
+
+When a write moves the recipient's mark past the latest message from someone
+else, the other participants get `CONVERSATION_LISTENING` `DELIVERED`
+`{ conversationId, userId, deliveredAt }`. The GETs' writes never fail the
+GET (a failure logs `delivered_write_failed`), and the list goes out with the
+new value. Both conversation GETs return `participants[].lastDeliveredAt`.
+
+A message to a phone whose app is closed stays ✓ until that app opens (its
+catch-up fetches the list) or its socket connects: a push alone cannot
+confirm delivery. Nothing is backfilled: the first list fetch after this
+deploys delivers what it shows.
+
 ## Push notifications
 
 When a private message is stored (`NEW_MESSAGE`), this service asks
@@ -320,6 +433,19 @@ X-Internal-Key: {CHAT_INTERNAL_KEY}
   or failing backend never delays or fails a message. Failures log
   `{"msg":"chat_push_failed","conversationId",...}` (ids and status only).
 - Skipped silently until both `BACKEND_URL` and `CHAT_INTERNAL_KEY` are set.
+
+A reaction is pushed the same way, to the message's author only
+(`worktrees/CHAT-CONTRACT.md` §3.5):
+
+```json
+{ "conversationId", "senderId": "<reactor>", "recipientIds": ["<author>"], "messageType": "REACTION", "snippet": "<emoji>" }
+```
+
+Only when the reaction is new from someone else (added, or changed to
+another emoji), and not to an author who muted the conversation or is no
+longer a participant. The backend words it "ສະແດງຄວາມຮູ້ສຶກ {emoji}
+ຕໍ່ຂໍ້ຄວາມຂອງທ່ານ" (seemuehub-backend#50, which must be deployed first) and
+counts it in the reactor's 30 pushes a minute.
 
 Group messages are not pushed. They used to post a `"platform": "TAXI"` payload
 to `NOTIFICATION_URL`, a leftover of the product this service was forked from;

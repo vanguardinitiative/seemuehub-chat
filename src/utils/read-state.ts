@@ -49,9 +49,9 @@ const timeOf = (value: unknown): number | null => {
  * Whether a read mark covers a message sent at `sendAt`. A message with no
  * `sendAt` cannot be placed in time, so any read mark covers it: once someone
  * has read the conversation, a timeless latest message does not stay unread
- * for them forever.
+ * for them forever. The delivered mark (utils/delivered.ts) uses the same rule.
  */
-const covers = (lastReadAt: unknown, sendAt: unknown): boolean => {
+export const covers = (lastReadAt: unknown, sendAt: unknown): boolean => {
   const read = timeOf(lastReadAt);
   if (read === null) return false;
   const sent = timeOf(sendAt);

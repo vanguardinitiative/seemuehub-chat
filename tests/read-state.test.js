@@ -82,9 +82,11 @@ const copy = (doc) => ({
 
 /**
  * Stubs the PUT's writes over one in-memory conversation, applying them the
- * way Mongo would: findOneAndUpdate matches only a participant and applies the
- * $max to the arrayFilters' element; the readAllAt updateOne applies only
- * while the messageId matches and readAllAt is still null.
+ * way Mongo would: findOneAndUpdate matches only a participant, applies each
+ * $max (lastReadAt and, since §5.1, lastDeliveredAt) to the arrayFilters'
+ * element, and returns the document from before or after as asked; the
+ * readAllAt updateOne applies only while the messageId matches and readAllAt
+ * is still null.
  */
 const store = (initial) => {
   let doc = copy(initial);
@@ -95,12 +97,15 @@ const store = (initial) => {
       const reader = String(filter["participants.user"]);
       const matches = String(filter._id) === String(doc._id) && doc.participants.some((p) => String(p.user) === reader);
       if (!matches) return query(null);
-      const at = update.$max["participants.$[me].lastReadAt"];
+      const before = copy(doc);
       const me = String(options.arrayFilters[0]["me.user"]);
-      doc.participants = doc.participants.map((p) =>
-        String(p.user) === me && !(p.lastReadAt && p.lastReadAt >= at) ? { ...p, lastReadAt: at } : p
-      );
-      return query(copy(doc));
+      for (const [path, at] of Object.entries(update.$max)) {
+        const field = path.replace("participants.$[me].", "");
+        doc.participants = doc.participants.map((p) =>
+          String(p.user) === me && !(p[field] && p[field] >= at) ? { ...p, [field]: at } : p
+        );
+      }
+      return query(options.returnDocument === "before" ? before : copy(doc));
     }),
     stub(conversationModel, "updateOne", async (filter, update, options) => {
       calls.markAll.push({ filter, update, options });
@@ -174,12 +179,18 @@ test("PUT /message-status/read", async (t) => {
       assert.strictEqual(String(filter._id), String(db.doc._id));
       assert.ok(filter["participants.user"] instanceof Types.ObjectId, "membership is part of the query");
       assert.strictEqual(String(filter["participants.user"]), a);
-      assert.deepStrictEqual(Object.keys(update), ["$max"], "only the read mark; no $set of anything else");
+      assert.deepStrictEqual(Object.keys(update), ["$max"], "only the read (and delivered) marks; no $set of anything else");
+      assert.deepStrictEqual(
+        Object.keys(update.$max).sort(),
+        ["participants.$[me].lastDeliveredAt", "participants.$[me].lastReadAt"],
+        "reading also delivers, in the same update (§5.1)"
+      );
       const at = update.$max["participants.$[me].lastReadAt"];
       assert.ok(at instanceof Date && at.getTime() >= before);
+      assert.strictEqual(update.$max["participants.$[me].lastDeliveredAt"], at);
       assert.strictEqual(options.arrayFilters.length, 1);
       assert.strictEqual(String(options.arrayFilters[0]["me.user"]), a);
-      assert.strictEqual(options.new, true);
+      assert.strictEqual(options.returnDocument, "before", "the copy from before tells whether delivery just moved");
       assert.strictEqual(options.timestamps, false, "a read must not bump updatedAt (the list's sort key)");
       for (const call of [...db.calls.markAll, ...db.calls.messages]) {
         assert.strictEqual(call.options.timestamps, false);
@@ -577,6 +588,8 @@ test("latestMessageData.isRead on the conversation reads", async (t) => {
       statusLookups.push(filter);
       return query([{ message: new Types.ObjectId(group.latestMessageData.messageId), status: "READ" }]);
     }),
+    // The list records the page as delivered (§5.1; delivered.test.js).
+    stub(conversationModel, "updateMany", async () => ({ matchedCount: 1, modifiedCount: 1 })),
   ];
 
   await t.test("GET /conversations: from lastReadAt, the sender, or the legacy status", async () => {

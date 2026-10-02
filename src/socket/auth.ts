@@ -1,5 +1,6 @@
 import type { Socket } from "socket.io";
 import { AccessTokenError, verifyAccessToken } from "@/utils/access-token";
+import type { TypingEntry } from "./typing";
 
 /**
  * Who is on the other end of a socket.
@@ -32,6 +33,15 @@ export interface SocketData {
   roomUserId?: string;
   /** Users who share a conversation with roomUserId: who hears this socket's online/offline. */
   partners?: string[];
+  /** When this socket's recent REACT_MESSAGEs were accepted, for the rate limit. */
+  reactionTimes?: number[];
+  /**
+   * Per conversationId (socket/typing.ts): the cached membership TYPING and
+   * DELIVERED share, and TYPING's throttle and last state.
+   */
+  typing?: Map<string, TypingEntry>;
+  /** DELIVERED's throttle per conversationId (socket/handlers.ts). */
+  delivered?: Map<string, { lastWriteAt: number | null; pendingUpTo?: Date; timer?: unknown; userId: string }>;
 }
 
 export const dataOf = (socket: Socket): SocketData => socket.data as SocketData;
@@ -41,7 +51,8 @@ export type SocketErrorCode =
   | "TOKEN_EXPIRED"
   | "NOT_PARTICIPANT"
   | "INVALID_PAYLOAD"
-  | "MESSAGE_SEND_FAILED";
+  | "MESSAGE_SEND_FAILED"
+  | "RATE_LIMITED";
 
 const ERROR_MESSAGES: Record<SocketErrorCode, string> = {
   AUTH_REQUIRED: "Connect with auth: { token } to use this event",
@@ -49,6 +60,7 @@ const ERROR_MESSAGES: Record<SocketErrorCode, string> = {
   NOT_PARTICIPANT: "You are not a participant of this conversation",
   INVALID_PAYLOAD: "Invalid payload",
   MESSAGE_SEND_FAILED: "Failed to send message",
+  RATE_LIMITED: "Too many events; try again shortly",
 };
 
 /** Every refusal goes out as one `ERROR` event of this shape. */
@@ -144,6 +156,28 @@ export const actorFor = (
     return null;
   }
   return { kind: "legacy" };
+};
+
+/**
+ * `actorFor` for the events only authenticated clients have (REACT_MESSAGE,
+ * TYPING). Their payloads carry no claimed identity, so there is nothing a
+ * legacy socket could be trusted with: it is refused with AUTH_REQUIRED in
+ * either mode (and logged as `legacy_socket` with `"action":"refused"`). No
+ * client that predates authenticated sockets sends these events.
+ */
+export const verifiedActorFor = (
+  socket: Socket,
+  event: string,
+  mode: SocketAuthMode,
+  now: () => number = Date.now
+): { kind: "verified"; userId: string } | null => {
+  if (!dataOf(socket).userId) {
+    logEvent({ msg: "legacy_socket", event, mode, action: "refused", socketId: socket.id, claimedUserId: null, origin: origin(socket) });
+    refuse(socket, event, "AUTH_REQUIRED");
+    return null;
+  }
+  const actor = actorFor(socket, event, mode, undefined, now);
+  return actor && actor.kind === "verified" ? actor : null;
 };
 
 /** Logs a tokenless connection; the event handlers log (and in enforce, refuse) what it then tries. */
