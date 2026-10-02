@@ -6,7 +6,14 @@ import { IMessage } from "@/models/message";
 import { userModel } from "@/models/user";
 import { env } from "./env";
 import { describeRedisConfig } from "./redis-log";
-import { deliverPayment, emitPresence, joinSetupRooms, routePayment } from "@/socket/rooms";
+import {
+  deliverPayment,
+  deliverReadMessage,
+  emitPresence,
+  joinSetupRooms,
+  routePayment,
+  type ReadMessageNotice,
+} from "@/socket/rooms";
 
 // Redis configuration matching seemuehub-backend style
 const redisConfig = {
@@ -167,25 +174,12 @@ const subscribeToClient = async (io: Server): Promise<void> => {
     });
 
     sub.subscribe("READ_MESSAGE", async (message: string) => {
-      interface readMessageData {
-        userIds: string[];
-        conversationId?: string;
-      }
       try {
-        const data: readMessageData = JSON.parse(message);
-        const { userIds, conversationId } = data;
-        const dataResponse = {
-          type: "READ_MESSAGE",
-          response: conversationId,
-        };
-        // Emit to all participants concurrently
-        await Promise.all(
-          userIds.map((userId) => {
-            io.to(userId.toString()).emit("CONVERSATION_LISTENING", dataResponse);
-          })
-        );
+        // Published by PUT /message-status/read to the reader (and the latest
+        // sender once it is read by all): see deliverReadMessage.
+        deliverReadMessage(io, JSON.parse(message) as ReadMessageNotice);
       } catch (error) {
-        console.log("error read message", error);
+        console.error("Error processing READ_MESSAGE:", error instanceof Error ? error.message : error);
       }
     });
 
