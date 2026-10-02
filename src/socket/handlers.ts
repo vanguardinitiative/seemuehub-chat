@@ -44,7 +44,8 @@ export interface MessagePayload {
   content: string;
   conversationId?: string;
   senderId: string;
-  receiverId: string;
+  /** Only read without a conversationId (controllers/message sendPrivateMessage). */
+  receiverId?: string;
   [field: string]: unknown;
 }
 

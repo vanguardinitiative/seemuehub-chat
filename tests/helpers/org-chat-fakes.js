@@ -168,6 +168,7 @@ const installStore = (seed = {}) => {
       stub(model, "find", (filter) => chain(() => rows().filter(matches(filter)), calls)),
       stub(model, "findOne", (filter) => chain(() => rows().find(matches(filter)) ?? null, calls)),
       stub(model, "findById", (id) => chain(() => rows().find((row) => row._id === String(id)) ?? null, calls)),
+      stub(model, "countDocuments", async (filter) => rows().filter(matches(filter)).length),
       stub(model, "findOneAndUpdate", (filter, update, options = {}) =>
         chain(() => {
           const { found, befores } = write("findOneAndUpdate", filter, update, options);

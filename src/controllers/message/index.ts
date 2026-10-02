@@ -34,7 +34,14 @@ interface MessageData {
   content: string;
   conversationId?: string;
   senderId: string;
-  receiverId: string;
+  /**
+   * Only for a message without a conversationId: the other person of the
+   * private conversation to find or create. With a conversationId it is not
+   * read - the conversation says who hears it - so a company conversation,
+   * which has no other participant, needs none. Clients still send one there
+   * (the organization's id, or the candidate's own id); it is ignored.
+   */
+  receiverId?: string;
   _id?: string;
   /** The message this one answers (CHAT-CONTRACT.md §2.2); checked by resolveReply. */
   replyTo?: unknown;
@@ -95,12 +102,12 @@ const sendPrivateMessage = async (socket: Socket, io: Server, data: MessageData)
       throw new Error("Invalid _id format");
     }
 
-    if (!data.messageType || !data.content || !data.senderId || !data.receiverId) {
-      throw new Error("messageType, content, senderId, and receiverId are required");
+    if (!data.messageType || !data.content || !data.senderId || (!data.conversationId && !data.receiverId)) {
+      throw new Error("messageType, content, senderId, and a conversationId or receiverId are required");
     }
 
     const conversation = !data.conversationId
-      ? await createOrGetConversation(data.senderId, data.receiverId, session)
+      ? await createOrGetConversation(data.senderId, data.receiverId as string, session)
       : null;
 
     const newConversationId = conversation?._id || data.conversationId;

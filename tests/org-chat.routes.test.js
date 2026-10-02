@@ -772,6 +772,45 @@ test("ORG_CHAT_ENABLED off", async (t) => {
   });
 });
 
+// ---------------------------------------------------------------- admin inspect
+
+test("GET /messages/admin carries the company of a company conversation (ORG-CHAT-CONTRACT.md §4.3)", async () => {
+  const { userModel } = require("../dist/models/user.js");
+  const ADMIN = oid();
+  const company = orgConversation();
+  const legacyCompany = orgConversation({ organization: undefined, conversationName: "ORGANIZATION_CONVERSATION" });
+  const privateChat = { _id: oid(), conversationType: "PRIVATE", participants: [{ user: CANDIDATE }, { user: STRANGER }], latestMessageData: {} };
+  const messages = [
+    { _id: oid(), conversation: company._id, sender: MEMBER, actorUserId: MEMBER, sendAsOrganizationId: ORG, content: "hi", createdAt: new Date(Date.now() - 2000) },
+    { _id: oid(), conversation: company._id, sender: CANDIDATE, content: "hello", createdAt: new Date(Date.now() - 1000) },
+  ];
+  const world = setup({ seed: { conversations: [company, legacyCompany, privateChat], messages } });
+  const admin = stub(userModel, "findById", (id) => query(String(id) === ADMIN ? { role: "ADMIN" } : { role: "USER" }));
+  try {
+    const inspect = (id, as = ADMIN) => request(port, "GET", `/v1/api/messages/admin?conversationId=${id}`, { as });
+
+    const res = await inspect(company._id);
+    assert.strictEqual(res.status, 200);
+    assert.deepStrictEqual(res.body.data.organization, {
+      _id: ORG,
+      name: "Lao Coffee Co",
+      nameLao: "ບໍລິສັດ ກາເຟລາວ",
+      logo: "https://cdn.test/logo.png",
+      slug: "lao-coffee",
+    });
+    assert.deepStrictEqual(res.body.data.messages.map((m) => [m.content, m.sendAsOrganizationId ?? null]), [["hi", ORG], ["hello", null]]);
+    assert.deepStrictEqual(res.body.data.pagination, { skip: 0, limit: 100, total: 2 });
+
+    // Opened before the snapshot existed: the id, nothing to name it by.
+    assert.deepStrictEqual((await inspect(legacyCompany._id)).body.data.organization, { _id: ORG });
+    assert.strictEqual((await inspect(privateChat._id)).body.data.organization, null);
+    assert.strictEqual((await inspect(company._id, CANDIDATE)).status, 403, "admins only, as before");
+  } finally {
+    admin();
+    world.restore();
+  }
+});
+
 // ---------------------------------------------------------------- .save()
 
 test(".save() is never used on conversations (CHAT-CONTRACT.md §1.1)", () => {

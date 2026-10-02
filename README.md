@@ -70,7 +70,7 @@ A socket that sends no token at all is a **legacy** socket (see
 | Event | Payload | Notes |
 | --- | --- | --- |
 | `SETUP` | `{ userId?, conversationId? }` | Joins the caller's room, which is where their messages, orders and payments arrive. `userId` is ignored for an authenticated socket (a mismatch is logged). `conversationId` also joins that conversation's room (`NEW_MESSAGE_PAGE`) if the caller is a participant. Emit after every `connect`. |
-| `NEW_MESSAGE` | `{ _id?, conversationId?, receiverId, messageType, content, attachments?, replyTo?, ... }` | `senderId` is the caller whatever the payload says. With `conversationId` the caller must be a participant; without it, the private conversation between caller and `receiverId` is found or created. `replyTo` makes it a [reply](#replies). |
+| `NEW_MESSAGE` | `{ _id?, conversationId?, receiverId?, messageType, content, attachments?, replyTo?, ... }` | `senderId` is the caller whatever the payload says. With `conversationId` the caller must be a participant and `receiverId` is not needed (ignored if sent; a company conversation has no other participant); without it, `receiverId` is required and the private conversation between caller and `receiverId` is found or created. `replyTo` makes it a [reply](#replies). |
 | `NEW_GROUP_MESSAGE` | `{ _id?, conversationId, messageType, content, replyTo?, ... }` | The caller must already be a participant. |
 | `REACT_MESSAGE` | `{ messageId, emoji }` | Sets the caller's [reaction](#reactions); `emoji: null` removes it. Authenticated sockets only. |
 | `TYPING` | `{ conversationId, typing }` | The [typing indicator](#typing), relayed to the other participants. Authenticated sockets only. |

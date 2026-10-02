@@ -345,3 +345,110 @@ test("a candidate's NEW_MESSAGE in an open company conversation is pushed to the
     store.restore();
   }
 });
+
+test("NEW_MESSAGE into a company conversation needs no receiverId (it has no other participant)", async (t) => {
+  const conversationOf = () => ({
+    _id: oid(),
+    conversationType: "PRIVATE",
+    organizationId: ORG,
+    candidateUserId: CANDIDATE,
+    participants: [{ user: CANDIDATE, isMuted: false }],
+    latestMessageData: {},
+  });
+  const session = { startTransaction() {}, inTransaction: () => true, async commitTransaction() {}, async abortTransaction() {}, endSession() {} };
+
+  // What each client sends today: the staging web the organization's id, www
+  // and old app builds participants[0], which is the candidate themselves.
+  for (const [label, receiverId] of [
+    ["no receiverId", undefined],
+    ["receiverId = the organization's id", ORG],
+    ["receiverId = the candidate's own id", CANDIDATE],
+  ]) {
+    await t.test(label, async () => {
+      published.length = 0;
+      const conversation = conversationOf();
+      const store = installStore({ conversations: [conversation] });
+      const restores = [...withFlag(), stub(mongoose, "startSession", async () => session)];
+      const backend = installBackend({ authorize: () => ({ allow: true, organization: null }) });
+      try {
+        const emitted = [];
+        await sendPrivateMessage({ id: "s1", emit: (event, payload) => emitted.push({ event, payload }) }, {}, {
+          messageType: "TEXT",
+          content: "Next Monday works",
+          senderId: CANDIDATE,
+          conversationId: conversation._id,
+          ...(receiverId ? { receiverId } : {}),
+        });
+        await settle(20);
+
+        assert.deepStrictEqual(emitted, [], "no ERROR");
+        assert.strictEqual(store.db.conversations.length, 1, "no other conversation was found or made");
+        assert.deepStrictEqual(store.db.messages.map((m) => [m.conversation, m.sender, m.content]), [[conversation._id, CANDIDATE, "Next Monday works"]]);
+        assert.strictEqual(store.db.conversations[0].latestMessageData.content, "Next Monday works");
+        const [notice] = published.filter((p) => p.channel === "SEND_MESSAGE").map((p) => p.message);
+        assert.strictEqual(String(notice.conversation._id), conversation._id);
+        assert.strictEqual(String(notice.conversation.organizationId), ORG, "delivered to org:{orgId} as well (deliverNewMessage)");
+        const [push] = backend.pushes();
+        assert.strictEqual(push.audience, "ORGANIZATION");
+        assert.deepStrictEqual(push.recipientIds, []);
+      } finally {
+        backend.restore();
+        undo(restores);
+        store.restore();
+      }
+    });
+  }
+
+  await t.test("over a real socket: a verified candidate's NEW_MESSAGE without receiverId reaches the org room", async () => {
+    published.length = 0;
+    const conversation = conversationOf();
+    const store = installStore({ conversations: [conversation] });
+    const restores = [...withFlag(), stub(mongoose, "startSession", async () => session)];
+    const backend = installBackend({ authorize: () => ({ allow: true, organization: null }) });
+    const server = await startServer({
+      mode: "enforce",
+      deps: { sendPrivateMessage, orgRoomsFor: async (userId) => (userId === MEMBER ? [ORG_ROOM] : []) },
+    });
+    try {
+      server.setMembers(conversation._id, [CANDIDATE]);
+      const member = await server.userClient(MEMBER);
+      await until(() => server.serverSocket(member).rooms.has(ORG_ROOM));
+      const candidate = await server.userClient(CANDIDATE);
+      const errors = collect(candidate, "ERROR");
+      const heard = nextEvent(member, "CONVERSATION_LISTENING");
+
+      candidate.emit("NEW_MESSAGE", { messageType: "TEXT", content: "Hello from the app", conversationId: conversation._id });
+      await until(() => published.some((p) => p.channel === "SEND_MESSAGE"));
+      // config/redis.ts does this on SEND_MESSAGE.
+      const [notice] = published.filter((p) => p.channel === "SEND_MESSAGE").map((p) => p.message);
+      rooms.deliverNewMessage(server.io, notice.conversation, notice.messageData, (fn) => fn());
+      const event = await heard;
+      assert.strictEqual(event.type, "NEW_MESSAGE");
+      assert.strictEqual(event.response.content, "Hello from the app");
+      assert.strictEqual(String(event.response.sender), CANDIDATE);
+      assert.deepStrictEqual(errors, []);
+    } finally {
+      await server.close();
+      backend.restore();
+      undo(restores);
+      store.restore();
+    }
+  });
+
+  await t.test("without a conversationId, receiverId is still required", async () => {
+    const restores = [stub(mongoose, "startSession", async () => session)];
+    try {
+      const emitted = [];
+      await sendPrivateMessage({ id: "s1", emit: (event, payload) => emitted.push({ event, payload }) }, {}, {
+        messageType: "TEXT",
+        content: "to whom?",
+        senderId: CANDIDATE,
+      });
+      assert.strictEqual(emitted.length, 1);
+      assert.strictEqual(emitted[0].payload.code, "MESSAGE_SEND_FAILED");
+      assert.match(emitted[0].payload.message, /conversationId or receiverId/);
+    } finally {
+      undo(restores);
+    }
+  });
+});
