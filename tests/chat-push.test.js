@@ -12,7 +12,7 @@ const mongoose = require("mongoose");
 const { Types } = mongoose;
 
 const { env } = require("../dist/config/env.js");
-const { chatPushBodies, pushChatMessage, snippetOf, CHAT_PUSH_PATH } = require("../dist/services/chat-push.js");
+const { chatPushBodies, pushChatMessage, pushReaction, reactionPushBody, snippetOf, CHAT_PUSH_PATH } = require("../dist/services/chat-push.js");
 const { sendPrivateMessage } = require("../dist/controllers/message/index.js");
 const { conversationModel } = require("../dist/models/conversation.js");
 const { messageModel } = require("../dist/models/message.js");
@@ -283,5 +283,83 @@ test("a private message stored through NEW_MESSAGE", async (t) => {
     await new Promise((r) => setTimeout(r, 10));
     restore();
     assert.deepStrictEqual(emitted, []);
+  });
+});
+
+// ---------------------------------------------------------------- reactions (CHAT-CONTRACT.md §3.5)
+
+test("reactionPushBody", async (t) => {
+  const author = oid();
+  const reactor = oid();
+  const conversationId = oid();
+  const members = (extra = {}) => [
+    { userId: author, isMuted: false, ...extra },
+    { userId: reactor, isMuted: false },
+  ];
+  const push = (extra = {}) => ({ conversationId, authorId: new Types.ObjectId(author), reactorId: reactor, emoji: "❤️", members: members(), ...extra });
+
+  await t.test("to the author, from the reactor, the emoji as the snippet", () => {
+    assert.deepStrictEqual(reactionPushBody(push()), {
+      conversationId,
+      senderId: reactor,
+      recipientIds: [author],
+      messageType: "REACTION",
+      snippet: "❤️",
+    });
+  });
+
+  await t.test("never for a reaction to one's own message", () => {
+    assert.strictEqual(reactionPushBody(push({ authorId: reactor })), null);
+  });
+
+  await t.test("not to an author who muted the conversation", () => {
+    assert.strictEqual(reactionPushBody(push({ members: members({ isMuted: true }) })), null);
+  });
+
+  await t.test("not to an author who is no longer a participant (or never was, like an organization's member)", () => {
+    assert.strictEqual(reactionPushBody(push({ members: [{ userId: reactor, isMuted: false }] })), null);
+  });
+
+  await t.test("not for an emoji outside the six, nor without an author", () => {
+    assert.strictEqual(reactionPushBody(push({ emoji: "🔥" })), null);
+    assert.strictEqual(reactionPushBody(push({ emoji: "\u2764" })), null);
+    assert.strictEqual(reactionPushBody(push({ authorId: undefined })), null);
+    assert.strictEqual(reactionPushBody(null), null);
+  });
+});
+
+test("pushReaction", async (t) => {
+  const author = oid();
+  const reactor = oid();
+  const push = { conversationId: oid(), authorId: author, reactorId: reactor, emoji: "👍", members: [{ userId: author, isMuted: false }, { userId: reactor, isMuted: false }] };
+
+  await t.test("posts one request to the backend with X-Internal-Key", async () => {
+    const { calls, deps } = recorder();
+    await pushReaction(push, deps);
+    assert.strictEqual(calls.length, 1);
+    assert.strictEqual(calls[0].url, `https://api.example.test${CHAT_PUSH_PATH}`);
+    assert.deepStrictEqual(calls[0].body, { conversationId: push.conversationId, senderId: reactor, recipientIds: [author], messageType: "REACTION", snippet: "👍" });
+    assert.deepStrictEqual(calls[0].options, { timeout: 3000, headers: { "X-Internal-Key": "test-key" } });
+  });
+
+  await t.test("nothing to tell: no request", async () => {
+    const { calls, deps } = recorder();
+    await pushReaction({ ...push, authorId: reactor }, deps);
+    assert.strictEqual(calls.length, 0);
+  });
+
+  await t.test("skipped silently without BACKEND_URL or CHAT_INTERNAL_KEY", async () => {
+    for (const config of [{ backendUrl: "" }, { internalKey: "" }]) {
+      const { calls, deps } = recorder(config);
+      await pushReaction(push, deps);
+      assert.strictEqual(calls.length, 0);
+    }
+  });
+
+  await t.test("a failing backend is swallowed and logged with ids only", async () => {
+    const { deps } = recorder({ post: async () => Promise.reject(Object.assign(new Error("down"), { code: "ECONNREFUSED" })) });
+    warnings.length = 0;
+    await pushReaction(push, deps);
+    assert.deepStrictEqual(warnings, [{ msg: "chat_push_failed", conversationId: push.conversationId, status: null, code: "ECONNREFUSED" }]);
   });
 });

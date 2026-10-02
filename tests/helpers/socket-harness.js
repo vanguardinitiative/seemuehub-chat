@@ -80,7 +80,7 @@ const connected = (client) =>
 async function startServer({ mode = "permissive", deps = {} } = {}) {
   const httpServer = http.createServer();
   const io = new Server(httpServer);
-  const calls = { published: [], private: [], group: [], lookups: [] };
+  const calls = { published: [], private: [], group: [], lookups: [], pushes: [] };
   /** conversationId -> [{ userId, isMuted }] */
   const members = new Map();
 
@@ -109,6 +109,9 @@ async function startServer({ mode = "permissive", deps = {} } = {}) {
     },
     sendGroupMessage: async (_socket, _io, data) => {
       calls.group.push(data);
+    },
+    pushReaction: (push) => {
+      calls.pushes.push(push);
     },
     stickerUrlPrefix: STICKER_PREFIX,
     ...deps,

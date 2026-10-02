@@ -528,3 +528,95 @@ test("REACT_MESSAGE needs an authenticated socket", async (t) => {
     await server.close();
   });
 });
+
+// ---------------------------------------------------------------- the push (CHAT-CONTRACT.md §3.5)
+
+test("REACT_MESSAGE asks for a push only when someone else adds or changes a reaction", async (t) => {
+  const { server, addMessage } = await reactionServer();
+  const [author, reactor] = [oid(), oid()];
+  const message = addMessage({ sender: new Types.ObjectId(author) });
+  const conversationId = String(message.conversation);
+  const messageId = String(message._id);
+  server.setMembers(conversationId, [author, { userId: reactor, isMuted: false }]);
+  const reactorClient = await server.userClient(reactor);
+  const authorClient = await server.userClient(author);
+  const pushes = server.calls.pushes;
+  const react = async (client, emoji) => {
+    const count = server.published("REACTION").length;
+    client.emit("REACT_MESSAGE", { messageId, emoji });
+    await until(() => server.published("REACTION").length === count + 1);
+    await settle(10);
+  };
+
+  await t.test("added: one push to the author, with the participants for the mute check", async () => {
+    await react(reactorClient, "👍");
+    assert.strictEqual(pushes.length, 1);
+    const [push] = pushes;
+    assert.deepStrictEqual(
+      { conversationId: push.conversationId, authorId: String(push.authorId), reactorId: push.reactorId, emoji: push.emoji },
+      { conversationId, authorId: author, reactorId: reactor, emoji: "👍" }
+    );
+    assert.deepStrictEqual(push.members.map((m) => m.userId).sort(), [author, reactor].sort());
+  });
+
+  await t.test("the same emoji again: no push", async () => {
+    await react(reactorClient, "👍");
+    assert.strictEqual(pushes.length, 1);
+  });
+
+  await t.test("changed to another emoji: a push", async () => {
+    await react(reactorClient, "😂");
+    assert.strictEqual(pushes.length, 2);
+    assert.strictEqual(pushes[1].emoji, "😂");
+  });
+
+  await t.test("removed: no push", async () => {
+    await react(reactorClient, null);
+    assert.strictEqual(pushes.length, 2);
+  });
+
+  await t.test("the author reacting to their own message: no push", async () => {
+    await react(authorClient, "❤️");
+    assert.strictEqual(pushes.length, 2);
+  });
+
+  await t.test("a refused reaction: no push", async () => {
+    const error = nextEvent(reactorClient, "ERROR");
+    reactorClient.emit("REACT_MESSAGE", { messageId, emoji: "🔥" });
+    await error;
+    await settle(20);
+    assert.strictEqual(pushes.length, 2);
+  });
+
+  await server.close();
+});
+
+test("a push that throws does not stop REACTION or answer ERROR", async () => {
+  const author = oid();
+  const reactor = oid();
+  const message = { _id: new Types.ObjectId(), conversation: new Types.ObjectId(), sender: new Types.ObjectId(author), messageType: "TEXT" };
+  const server = await harness.startServer({
+    deps: {
+      findReactionTarget: async () => ({ ...message }),
+      writeReaction: async () => ({ reactions: [] }),
+      pushReaction: () => {
+        throw new Error("boom");
+      },
+    },
+  });
+  server.setMembers(String(message.conversation), [author, reactor]);
+  const client = await server.userClient(reactor);
+  const errors = collect(client, "ERROR");
+  const heard = nextEvent(client, "CONVERSATION_LISTENING");
+  const quiet = console.error;
+  console.error = () => {};
+  try {
+    client.emit("REACT_MESSAGE", { messageId: String(message._id), emoji: "👍" });
+    assert.strictEqual((await heard).type, "REACTION");
+    await settle(20);
+  } finally {
+    console.error = quiet;
+  }
+  assert.deepStrictEqual(errors, []);
+  await server.close();
+});

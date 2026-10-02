@@ -4,6 +4,7 @@ import { env } from "./env";
 import { sendGroupMessage, sendPrivateMessage } from "@/controllers/message";
 import { conversationPartners, isParticipant, membersOf } from "@/utils/conversation-access";
 import { findReactionTarget, writeReaction } from "@/services/reactions";
+import { pushReaction } from "@/services/chat-push";
 import { registerSocketHandlers } from "@/socket/handlers";
 
 export type { SetupMessage as DataType } from "@/socket/handlers";
@@ -41,6 +42,7 @@ export const setupSocketService = (server: any) => {
     sendGroupMessage,
     findReactionTarget,
     writeReaction,
+    pushReaction,
     stickerUrlPrefix: env.STICKER_URL_PREFIX,
   });
 

@@ -11,6 +11,7 @@ import {
   type SocketAuthMode,
   type SocketErrorCode,
 } from "./auth";
+import type { ReactionPush } from "@/services/chat-push";
 import type { ConversationMember } from "@/utils/conversation-access";
 import { isClientMessageType } from "@/utils/message-type";
 import {
@@ -79,6 +80,8 @@ export interface SocketDeps {
     emoji: Reaction | null,
     at: Date
   ) => Promise<{ reactions?: StoredReaction[] | null } | null>;
+  /** Tells a message's author about a new reaction through the backend; fire and forget (services/chat-push.ts). */
+  pushReaction: (push: ReactionPush) => unknown;
   /** STICKER_URL_PREFIX: where a STICKER's image must live (utils/sticker.ts). */
   stickerUrlPrefix: string;
   /** The clock for the throttles; Date.now unless a test passes one. */
@@ -392,4 +395,19 @@ const handleReaction = async (socket: Socket, deps: SocketDeps, raw: unknown): P
     reactions: reactionViews(applyReaction(before.reactions, actor.userId, emoji, at)),
   };
   await deps.publish("REACTION", JSON.stringify(notice));
+
+  // The author hears about a reaction that is new, added or changed to
+  // another emoji, from someone else. Not a removal, and not the same emoji
+  // again (CHAT-CONTRACT.md §3.5). reactionPushBody also leaves out an author
+  // who left or muted the conversation.
+  const previous = reactionOf(before.reactions, actor.userId);
+  if (emoji !== null && emoji !== previous && idString(target.sender) !== actor.userId) {
+    try {
+      void Promise.resolve(
+        deps.pushReaction({ conversationId, authorId: target.sender, reactorId: actor.userId, emoji, members })
+      ).catch(() => {});
+    } catch (error) {
+      console.error("reaction push failed", { socketId: socket.id, error: error instanceof Error ? error.message : error });
+    }
+  }
 };
