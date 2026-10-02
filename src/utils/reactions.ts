@@ -1,5 +1,8 @@
 import { Types } from "mongoose";
 import { idString } from "./ids";
+import { isServerMessageType } from "./message-type";
+
+export { isServerMessageType };
 
 /**
  * Reactions (worktrees/CHAT-CONTRACT.md §3), as pure functions. One reaction
@@ -45,13 +48,10 @@ export interface ReactionTarget {
 /** Why a message cannot take a reaction; logged as `reaction_refused`. */
 export type ReactionTargetProblem = "DELETED" | "ORDER_MESSAGE" | "SERVER_MESSAGE";
 
-/** SYSTEM and the ORDER_* types: the service's own messages (utils/message-type.ts). */
-export const isServerMessageType = (messageType: unknown): boolean =>
-  typeof messageType === "string" && (messageType === "SYSTEM" || messageType.startsWith("ORDER_"));
-
 /**
  * Why `target` cannot take a reaction, or null when it can: not deleted, not
- * an order message, and not a SYSTEM or ORDER_* type.
+ * an order message, and not a SYSTEM, ORDER_* or AGENT type (the service's
+ * own messages, utils/message-type.ts).
  */
 export const reactionTargetProblem = (target: ReactionTarget): ReactionTargetProblem | null => {
   if (target.isDeleted === true) return "DELETED";

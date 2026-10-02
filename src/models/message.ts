@@ -43,6 +43,28 @@ export interface IReplyPreview {
   thumbUrl?: string;
 }
 
+/** What an AGENT message is about (AGENT-CONTRACT.md §8.1). */
+export const AGENT_MESSAGE_KINDS = ["AGREEMENT", "CHECKLIST", "NOTE"] as const;
+export type AgentMessageKind = (typeof AGENT_MESSAGE_KINDS)[number];
+
+/**
+ * The Seemue AI card an AGENT message carries (AGENT-CONTRACT.md §8.1). Only
+ * POST /agent-messages writes it (src/services/agent-messages.ts), from
+ * seemuehub-backend; no client can set it (RESERVED_MESSAGE_FIELDS).
+ */
+export interface IAgentMessage {
+  v: 1;
+  kind: AgentMessageKind;
+  /** A §4 card: `{ type, v, id, fallbackText, ... }`, checked by utils/agent-message.ts. */
+  card: Record<string, unknown>;
+  /** The Seemue AI thread it came from, when there is one. */
+  threadId?: string;
+  /** The AgentAction it belongs to, when there is one. */
+  actionId?: string;
+  /** The participant (or company member) who asked for it; also the message's sender. */
+  requestedBy: mongoose.Types.ObjectId;
+}
+
 /** One person's reaction (CHAT-CONTRACT.md §3.2): at most one per user per message. */
 export interface IReaction {
   user: mongoose.Types.ObjectId;
@@ -62,6 +84,10 @@ enum MessageType {
   VOICE_CALL = "VOICE_CALL",
   VIDEO_CALL = "VIDEO_CALL",
   SYSTEM = "SYSTEM",
+  // A Seemue AI card posted on a participant's request (AGENT-CONTRACT.md §8).
+  // Server-only, like SYSTEM: utils/message-type.ts keeps it out of what
+  // clients may send.
+  AGENT = "AGENT",
   // Order-related message types
   ORDER_UPDATE = "ORDER_UPDATE",
   ORDER_STATUS_CHANGE = "ORDER_STATUS_CHANGE",
@@ -118,6 +144,8 @@ export interface IMessage extends Document {
   isOrderMessage?: boolean; // Whether this is an order-related message
   sendAsOrganizationId?: mongoose.Types.ObjectId;
   actorUserId?: mongoose.Types.ObjectId;
+  /** AGENT messages only. */
+  agent?: IAgentMessage;
 }
 
 const messageSchema = new Schema<IMessage>(
@@ -225,6 +253,23 @@ const messageSchema = new Schema<IMessage>(
     },
     sendAsOrganizationId: { type: Schema.Types.ObjectId, ref: "Organization", index: true },
     actorUserId: { type: Schema.Types.ObjectId, ref: "User" },
+    // AGENT messages only; absent on every other message. The card's shape is
+    // checked before the write (utils/agent-message.ts), so no validators
+    // here could fail a send that already passed.
+    agent: {
+      type: new Schema(
+        {
+          v: Number,
+          kind: { type: String, enum: AGENT_MESSAGE_KINDS },
+          card: Schema.Types.Mixed,
+          threadId: String,
+          actionId: String,
+          requestedBy: { type: Schema.Types.ObjectId, ref: "User" },
+        },
+        { _id: false, minimize: false }
+      ),
+      default: undefined,
+    },
   },
   { timestamps: true }
 );

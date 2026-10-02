@@ -25,7 +25,7 @@ messageRoute.post("/", checkAuthorizationMiddleware, async (req, res) => {
     const actorUserId = String((req as any).user?.userId ?? (req as any).user?.id);
     const { conversationId, body, content, sendAsOrganizationId, messageType } = req.body;
     // Stored as TEXT whatever is sent, but a request for a server-only type
-    // (SYSTEM, ORDER_*) is refused rather than quietly downgraded.
+    // (SYSTEM, ORDER_*, AGENT) is refused rather than quietly downgraded.
     if (messageType !== undefined && !isClientMessageType(messageType))
       return void res.status(400).json(invalid("INVALID_MESSAGE_TYPE"));
     // The one exception is a STICKER, which means nothing without its

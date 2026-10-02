@@ -5,6 +5,7 @@ import messageStatusRoute from "./messageStatus";
 import coreSocketRoute from "./core-socket";
 import orderRoute from "./order";
 import organizationRoute from "./organization";
+import agentMessageRoute from "./agent-message";
 
 const router: IRouter = Router();
 
@@ -14,5 +15,6 @@ router.use("/message-status", messageStatusRoute);
 router.use("/core-socket", coreSocketRoute);
 router.use("/orders", orderRoute);
 router.use("/organizations", organizationRoute);
+router.use("/agent-messages", agentMessageRoute);
 
 export default router;
