@@ -1,3 +1,5 @@
+import { idString, isObjectIdString } from "./ids";
+
 /**
  * Replies (worktrees/CHAT-CONTRACT.md §2), as pure functions over the stored
  * target message the way Mongo hands it back (lean or hydrated).
@@ -39,20 +41,6 @@ export interface ReplyPreview {
 
 /** Why a reply was dropped; logged as `reply_dropped`, never sent to the client. */
 export type ReplyDropReason = "INVALID_ID" | "NOT_FOUND" | "OTHER_CONVERSATION" | "DELETED" | "ORDER_MESSAGE";
-
-export const isObjectIdString = (value: unknown): value is string =>
-  typeof value === "string" && /^[0-9a-fA-F]{24}$/.test(value);
-
-/** An id as a string, from a string, an ObjectId, or anything with an `_id`. */
-const idString = (value: unknown): string | null => {
-  if (value === null || value === undefined) return null;
-  if (typeof value === "object" && typeof (value as { toHexString?: unknown }).toHexString === "function") {
-    return String((value as { toHexString: () => string }).toHexString());
-  }
-  if (typeof value === "object" && "_id" in (value as object)) return idString((value as { _id: unknown })._id);
-  const text = String(value);
-  return text.length > 0 ? text : null;
-};
 
 /** Whether the payload asked for a reply at all: `replyTo` present and not empty. */
 export const asksForReply = (replyTo: unknown): boolean =>

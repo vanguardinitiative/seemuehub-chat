@@ -2,6 +2,7 @@ import type { Request } from "express";
 import { Types } from "mongoose";
 
 import { conversationModel } from "@/models/conversation";
+import { idString } from "@/utils/ids";
 
 /**
  * Who may read a conversation.
@@ -70,4 +71,31 @@ export const isParticipant = async (conversationId: string, userId: string): Pro
 export const conversationPartners = async (userId: string): Promise<string[]> => {
   const ids = await conversationModel.distinct("participants.user", participantOf(userId));
   return ids.map((id) => String(id)).filter((id) => id !== userId);
+};
+
+/** A participant as the socket events need one. */
+export interface ConversationMember {
+  userId: string;
+  isMuted: boolean;
+}
+
+/**
+ * The participants of `conversationId` when `userId` is one of them, and null
+ * when not (or when there is no such conversation): the membership check and
+ * the audience in one membership-filtered `findOne`. REACT_MESSAGE sends its
+ * REACTION to these and checks the author's `isMuted` before a push; TYPING
+ * caches them per socket.
+ */
+export const membersOf = async (conversationId: string, userId: string): Promise<ConversationMember[] | null> => {
+  const conversation = await conversationModel
+    .findOne({ _id: conversationId, ...participantOf(userId) })
+    .select("participants.user participants.isMuted")
+    .lean();
+  if (!conversation) return null;
+  const members = new Map<string, ConversationMember>();
+  for (const participant of conversation.participants ?? []) {
+    const id = idString(participant?.user);
+    if (id && !members.has(id)) members.set(id, { userId: id, isMuted: participant.isMuted === true });
+  }
+  return [...members.values()];
 };

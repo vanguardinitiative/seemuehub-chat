@@ -8,10 +8,12 @@ import { env } from "./env";
 import { describeRedisConfig } from "./redis-log";
 import {
   deliverPayment,
+  deliverReaction,
   deliverReadMessage,
   emitPresence,
   joinSetupRooms,
   routePayment,
+  type ReactionNotice,
   type ReadMessageNotice,
 } from "@/socket/rooms";
 
@@ -180,6 +182,16 @@ const subscribeToClient = async (io: Server): Promise<void> => {
         deliverReadMessage(io, JSON.parse(message) as ReadMessageNotice);
       } catch (error) {
         console.error("Error processing READ_MESSAGE:", error instanceof Error ? error.message : error);
+      }
+    });
+
+    sub.subscribe("REACTION", async (message: string) => {
+      try {
+        // Published by REACT_MESSAGE (src/socket/handlers.ts) after its write:
+        // every participant, the reactor included. See deliverReaction.
+        deliverReaction(io, JSON.parse(message) as ReactionNotice);
+      } catch (error) {
+        console.error("Error processing REACTION:", error instanceof Error ? error.message : error);
       }
     });
 

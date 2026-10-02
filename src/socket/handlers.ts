@@ -1,7 +1,31 @@
 import type { Server, Socket } from "socket.io";
 import { Types } from "mongoose";
-import { actorFor, dataOf, logEvent, logLegacyConnection, refuse, socketAuthMiddleware, type SocketAuthMode } from "./auth";
+import {
+  actorFor,
+  dataOf,
+  logEvent,
+  logLegacyConnection,
+  refuse,
+  socketAuthMiddleware,
+  verifiedActorFor,
+  type SocketAuthMode,
+  type SocketErrorCode,
+} from "./auth";
+import type { ConversationMember } from "@/utils/conversation-access";
 import { isClientMessageType } from "@/utils/message-type";
+import {
+  REACTION_RATE,
+  allowInWindow,
+  applyReaction,
+  isReaction,
+  reactionOf,
+  reactionTargetProblem,
+  reactionViews,
+  type Reaction,
+  type ReactionTarget,
+  type StoredReaction,
+} from "@/utils/reactions";
+import { idString } from "@/utils/ids";
 import { checkSticker } from "@/utils/sticker";
 
 /**
@@ -29,15 +53,36 @@ export interface SetupMessage {
   partners: string[];
 }
 
+/** What REACT_MESSAGE publishes on Redis `REACTION` (see socket/rooms.ts deliverReaction). */
+export interface ReactionMessage {
+  userIds: string[];
+  conversationId: string;
+  messageId: string;
+  reactions: ReturnType<typeof reactionViews>;
+}
+
 export interface SocketDeps {
   mode: SocketAuthMode;
   publish: (channel: string, message: string) => unknown;
   isParticipant: (conversationId: string, userId: string) => Promise<boolean>;
   conversationPartners: (userId: string) => Promise<string[]>;
+  /** The conversation's participants when `userId` is one of them, else null (utils/conversation-access.ts). */
+  membersOf: (conversationId: string, userId: string) => Promise<ConversationMember[] | null>;
   sendPrivateMessage: (socket: Socket, io: Server, data: MessagePayload) => Promise<void>;
   sendGroupMessage: (socket: Socket, io: Server, data: MessagePayload) => Promise<void>;
+  /** The message a REACT_MESSAGE names (services/reactions.ts). */
+  findReactionTarget: (messageId: string) => Promise<ReactionTarget | null>;
+  /** The one reaction write; resolves to the list it replaced, or null when the message no longer takes reactions. */
+  writeReaction: (
+    messageId: string,
+    userId: string,
+    emoji: Reaction | null,
+    at: Date
+  ) => Promise<{ reactions?: StoredReaction[] | null } | null>;
   /** STICKER_URL_PREFIX: where a STICKER's image must live (utils/sticker.ts). */
   stickerUrlPrefix: string;
+  /** The clock for the throttles; Date.now unless a test passes one. */
+  now?: () => number;
 }
 
 /**
@@ -102,6 +147,12 @@ export const registerSocketHandlers = (io: Server, deps: SocketDeps): void => {
           socketId: socket.id,
           error: error instanceof Error ? error.message : error,
         });
+      });
+    });
+
+    socket.on("REACT_MESSAGE", (data: unknown) => {
+      handleReaction(socket, deps, data).catch((error) => {
+        console.error("REACT_MESSAGE failed", { socketId: socket.id, error: error instanceof Error ? error.message : error });
       });
     });
 
@@ -255,4 +306,90 @@ const handleMessage = async (
   }
 
   await send(socket, io, message);
+};
+
+/** The socket's REACT_MESSAGE timestamps for the rate limit (allowInWindow). */
+const reactionTimesOf = (socket: Socket): number[] => {
+  const data = dataOf(socket);
+  if (!Array.isArray(data.reactionTimes)) data.reactionTimes = [];
+  return data.reactionTimes;
+};
+
+/**
+ * REACT_MESSAGE { messageId, emoji | null } (CHAT-CONTRACT.md §3.3): sets the
+ * caller's reaction on a message (null removes it), then publishes REACTION
+ * with the message's whole list to every participant.
+ *
+ * Refusals are `ERROR { code, event: "REACT_MESSAGE", messageId }`, and are
+ * logged as `reaction_refused` with a reason:
+ * - RATE_LIMITED: more than 10 in 10 s from this socket (counted first, so a
+ *   flood never reaches Mongo);
+ * - INVALID_PAYLOAD (`field` messageId or emoji): not an ObjectId, or an
+ *   emoji that is not null nor one of the six; or (`field: "messageId"`) a
+ *   deleted message, an order message, or a SYSTEM / ORDER_* one;
+ * - NOT_PARTICIPANT: the caller is not in the message's conversation. A
+ *   message id that does not exist gets the same answer, so a stranger
+ *   learns nothing about which ids exist or are deleted.
+ */
+const handleReaction = async (socket: Socket, deps: SocketDeps, raw: unknown): Promise<void> => {
+  const event = "REACT_MESSAGE";
+  const actor = verifiedActorFor(socket, event, deps.mode, deps.now);
+  if (!actor) return;
+
+  const data = (raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {}) as Record<string, unknown>;
+  const messageId = data.messageId;
+  const echo = typeof messageId === "string" ? messageId.slice(0, 64) : null;
+  const refuseReaction = (code: SocketErrorCode, reason: string, extra: Record<string, unknown> = {}): void => {
+    logEvent({ msg: "reaction_refused", code, reason, socketId: socket.id, userId: actor.userId, messageId: echo });
+    refuse(socket, event, code, { messageId: echo, ...extra });
+  };
+
+  const now = deps.now ?? Date.now;
+  if (!allowInWindow(reactionTimesOf(socket), now(), REACTION_RATE.limit, REACTION_RATE.windowMs)) {
+    refuseReaction("RATE_LIMITED", "RATE_LIMITED");
+    return;
+  }
+
+  if (!isObjectId(messageId)) {
+    refuseReaction("INVALID_PAYLOAD", "MESSAGE_ID", { field: "messageId" });
+    return;
+  }
+  const emoji = data.emoji;
+  if (emoji !== null && !isReaction(emoji)) {
+    refuseReaction("INVALID_PAYLOAD", "EMOJI", { field: "emoji" });
+    return;
+  }
+
+  const target = await deps.findReactionTarget(messageId);
+  const conversationId = idString(target?.conversation);
+  if (!target || !conversationId) {
+    refuseReaction("NOT_PARTICIPANT", "NOT_FOUND");
+    return;
+  }
+  const members = await deps.membersOf(conversationId, actor.userId);
+  if (!members) {
+    refuseReaction("NOT_PARTICIPANT", "NOT_PARTICIPANT");
+    return;
+  }
+  const problem = reactionTargetProblem(target);
+  if (problem) {
+    refuseReaction("INVALID_PAYLOAD", problem, { field: "messageId" });
+    return;
+  }
+
+  const at = new Date(now());
+  const before = await deps.writeReaction(messageId, actor.userId, emoji, at);
+  if (!before) {
+    // Deleted between the check and the write.
+    refuseReaction("INVALID_PAYLOAD", "DELETED", { field: "messageId" });
+    return;
+  }
+
+  const notice: ReactionMessage = {
+    userIds: members.map((member) => member.userId),
+    conversationId,
+    messageId,
+    reactions: reactionViews(applyReaction(before.reactions, actor.userId, emoji, at)),
+  };
+  await deps.publish("REACTION", JSON.stringify(notice));
 };
