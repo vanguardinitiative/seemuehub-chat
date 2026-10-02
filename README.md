@@ -113,10 +113,10 @@ with `content: "STICKER"` as a sticker.
 
 | Event | `type` | `response` | Sent to |
 | --- | --- | --- | --- |
-| `CONVERSATION_LISTENING` | `NEW_MESSAGE` | the stored message | every participant's room (4 s later for FILE/VIDEO/VOICE) |
+| `CONVERSATION_LISTENING` | `NEW_MESSAGE` | the stored message | every participant's room (4 s later for FILE/VIDEO/VOICE); for a [resend](#resending-a-message) of a stored message, only the resending socket |
 | `CONVERSATION_LISTENING` | `NEW_MESSAGE_PAGE` | the stored message | the conversation room |
-| `CONVERSATION_LISTENING` | `READ_MESSAGE` | the conversationId | participants |
-| `CONVERSATION_LISTENING` | `ORDER` | the order conversation from the backend | participants |
+| `CONVERSATION_LISTENING` | `READ_MESSAGE` | the conversationId, with `readerId`, `readAt`, `readAllAt` beside it (see [Read state](#read-state)) | the reader, and the latest sender when that read made it read by all |
+| `CONVERSATION_LISTENING` | `ORDER` | the order conversation from the backend, with `latestMessageData` and `updatedAt` as stored after the step (the step's own message) | participants |
 | `CONVERSATION_LISTENING` | `USER_ONLINE` | `{ userId, isOnline }` | users who share a conversation with `userId` (as of that user's SETUP) |
 | `LISTENING` | `PAYMENT` | the payment (`_id, userId, type, status, amount, subtotalAmount, processingFeeAmount, currency, referenceId, ...`) | the payer's room |
 | `ERROR` | | `{ code, message, event, conversationId?, _id? }` | the socket that caused it |
@@ -130,6 +130,18 @@ with `content: "STICKER"` as a sticker.
 | `NOT_PARTICIPANT` | Not a participant of `conversationId`; nothing was stored or joined |
 | `INVALID_PAYLOAD` | The payload was not an object, or (`field: "messageType"`) its `messageType` is missing or not one a client may send, or (`field: "attachments"`) a `STICKER` failed the [sticker check](#stickers); `_id` echoes the client's id |
 | `MESSAGE_SEND_FAILED` | Storing the message failed (`message` says why); `_id` echoes the client's id |
+
+### Resending a message
+
+A client that never saw its `NEW_MESSAGE` come back (a dropped socket, a
+timeout) should resend it with the **same `_id`**. If that `_id` is already
+stored as the same sender's message, the insert hits the duplicate key and the
+resend is answered, to the resending socket only, with the stored message on
+`CONVERSATION_LISTENING` `NEW_MESSAGE` instead of `ERROR`
+(`worktrees/CHAT-CONTRACT.md` §1.7). Nothing is stored, published or pushed
+again; each such resend logs `{"msg":"message_resent",...}`. An `_id` that
+belongs to someone else's message is still `MESSAGE_SEND_FAILED`. Same for
+`NEW_GROUP_MESSAGE`.
 
 ### `SOCKET_AUTH_MODE`
 
@@ -233,9 +245,59 @@ Rollout:
 
 Rolling back is removing the key here (step 4).
 
-`PUT /message-status/read?conversationId=` marks a conversation read for the
-caller, and only for a participant: anyone else gets the same 404 as a
-conversation that does not exist.
+## Read state
+
+Who has read what lives on the conversation, in `participants[].lastReadAt`:
+a participant has read everything sent at or before it
+(`worktrees/CHAT-CONTRACT.md` §1). Private sends never wrote the old
+per-message `MessageStatus` rows, so reads used to go nowhere and every chat
+looked unread.
+
+`PUT /message-status/read?conversationId=` (any body; the reader is the
+token's user):
+
+- moves the caller's `lastReadAt` to now (never back), for a participant
+  only: anyone else gets the same 404 as a conversation that does not exist.
+  Every type works, including an order step posted by an admin who is not a
+  participant;
+- in a GROUP, also marks the caller's `MessageStatus` rows READ, as before;
+- when everyone but the latest sender has now read the latest message, sets
+  `latestMessageData.readAllAt` (and `readAllAt` on the earlier messages from
+  others). Never in a GROUP, and never when the only participant sent it;
+- publishes `READ_MESSAGE` to the reader's devices, and to the latest sender
+  only when this read set `readAllAt` and the sender is a participant. Old app
+  builds take any `READ_MESSAGE` as "read for me", so nobody else gets it:
+
+  ```js
+  { type: "READ_MESSAGE", response: "<conversationId>", readerId, readAt, readAllAt /* ISO or null */ }
+  ```
+
+- answers `200 { code: "CHAT-200", data: { conversationId, lastReadAt, readAllAt } }`.
+
+None of these writes touches `updatedAt`, so reading never reorders the list.
+
+`GET /conversations` and `GET /conversations/:id` set
+`latestMessageData.isRead` for the caller: they sent it, or their `lastReadAt`
+covers its `sendAt`, or (groups) its `MessageStatus` row says READ. A
+conversation without a latest sender counts as read. `participants[].lastReadAt`
+is returned with the participants.
+
+### Backfill
+
+Nobody has a `lastReadAt` until they next open a chat, so without a backfill
+every existing conversation whose latest message came from someone else stays
+`isRead: false`, and the clients' new unread counts would include all of them.
+`src/scripts/backfill-read-state.ts` gives each participant without a
+`lastReadAt` the latest message's `sendAt`, where that message is older than 7
+days or the order is `COMPLETED`, `CANCELLED` or `REFUNDED`; recent messages
+in active chats stay unread until opened. It writes with one pipeline
+`updateMany` (no `updatedAt` change) and is safe to re-run. Run it inside the
+deployed container, which has the service's `MONGODB_URI`:
+
+```sh
+sudo docker exec seemuehub-chat node dist/scripts/backfill-read-state.js          # dry run: counts and 5 sample ids
+sudo docker exec seemuehub-chat node dist/scripts/backfill-read-state.js --apply  # writes; only with the owner's OK
+```
 
 ## Push notifications
 

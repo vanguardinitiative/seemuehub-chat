@@ -9,6 +9,7 @@ import { pushChatMessage } from "@/services/chat-push";
 import { messages } from "@/config";
 import { messageStatusModel } from "@/models/messageStatus";
 import { isParticipant, participantOf, userIdOf } from "@/utils/conversation-access";
+import { logEvent } from "@/socket/auth";
 
 interface MessageData {
   messageType: string;
@@ -18,6 +19,51 @@ interface MessageData {
   receiverId: string;
   _id?: string;
 }
+
+/** Aborts the send's transaction; a failure to abort is logged, never thrown over the send's own error. */
+const abortQuietly = async (session: mongoose.ClientSession): Promise<void> => {
+  try {
+    if (typeof session.inTransaction !== "function" || session.inTransaction()) {
+      await session.abortTransaction();
+    }
+  } catch (error) {
+    console.error("Error aborting message transaction:", error instanceof Error ? error.message : "Unknown error");
+  }
+};
+
+/** A duplicate key on a message's _id (the only unique key a message has). */
+const isDuplicateId = (error: unknown): boolean => {
+  const { code, keyPattern } = (error ?? {}) as { code?: unknown; keyPattern?: Record<string, unknown> };
+  if (code !== 11000) return false;
+  return !keyPattern || Object.prototype.hasOwnProperty.call(keyPattern, "_id");
+};
+
+/**
+ * A resend of a message that was already stored (CHAT-CONTRACT.md §1.7). A
+ * client that never saw its NEW_MESSAGE come back (a dropped socket, a
+ * timeout) sends it again with the same `_id`, and the insert hits the
+ * duplicate key. If that `_id` is the same sender's stored message, the resend
+ * is answered with the stored message on CONVERSATION_LISTENING NEW_MESSAGE,
+ * to the resending socket only, instead of an ERROR: the retry confirms it.
+ * Nothing is stored, published or pushed again. Someone else's `_id` is still
+ * an error. Call it after the transaction is aborted: the lookup runs outside
+ * it.
+ */
+const confirmResentMessage = async (
+  socket: Socket,
+  event: "NEW_MESSAGE" | "NEW_GROUP_MESSAGE",
+  data: MessageData,
+  error: unknown
+): Promise<boolean> => {
+  if (!data?._id || !data.senderId || !isDuplicateId(error)) return false;
+  if (!mongoose.Types.ObjectId.isValid(data._id) || !mongoose.Types.ObjectId.isValid(String(data.senderId))) return false;
+  const stored = await messageModel.findOne({ _id: data._id, sender: data.senderId }).lean();
+  if (!stored) return false;
+  // The shape SEND_MESSAGE delivers: the stored message through JSON.
+  socket.emit("CONVERSATION_LISTENING", { type: "NEW_MESSAGE", response: JSON.parse(JSON.stringify(stored)) });
+  logEvent({ msg: "message_resent", event, socketId: socket.id, userId: String(data.senderId), _id: String(data._id) });
+  return true;
+};
 
 const sendPrivateMessage = async (socket: Socket, io: Server, data: MessageData): Promise<void> => {
   const session = await mongoose.startSession();
@@ -114,7 +160,12 @@ const sendPrivateMessage = async (socket: Socket, io: Server, data: MessageData)
     // message (src/services/chat-push.ts). Never to the sender.
     void pushChatMessage(conversationData, messageData);
   } catch (error) {
-    await session.abortTransaction();
+    await abortQuietly(session);
+    try {
+      if (await confirmResentMessage(socket, "NEW_MESSAGE", data, error)) return;
+    } catch (lookupError) {
+      console.error("Error confirming a resent message:", lookupError instanceof Error ? lookupError.message : "Unknown error");
+    }
     console.error("Error sending message:", error instanceof Error ? error.message : "Unknown error");
     socket.emit("ERROR", {
       code: "MESSAGE_SEND_FAILED",
@@ -204,7 +255,12 @@ const sendGroupMessage = async (socket: Socket, io: Server, data: MessageData): 
 
     await session.commitTransaction();
   } catch (error) {
-    await session.abortTransaction();
+    await abortQuietly(session);
+    try {
+      if (await confirmResentMessage(socket, "NEW_GROUP_MESSAGE", data, error)) return;
+    } catch (lookupError) {
+      console.error("Error confirming a resent message:", lookupError instanceof Error ? lookupError.message : "Unknown error");
+    }
     console.error("Error sending message:", error instanceof Error ? error.message : "Unknown error");
     socket.emit("ERROR", {
       code: "MESSAGE_SEND_FAILED",

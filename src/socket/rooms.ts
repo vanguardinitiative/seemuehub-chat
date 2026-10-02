@@ -51,6 +51,38 @@ export const emitPresence = (
   io.to(rooms).emit("CONVERSATION_LISTENING", { type: "USER_ONLINE", response });
 };
 
+/** What PUT /message-status/read publishes on Redis `READ_MESSAGE` (CHAT-CONTRACT.md §1.2). */
+export interface ReadMessageNotice {
+  userIds?: unknown;
+  conversationId?: unknown;
+  readerId?: unknown;
+  readAt?: unknown;
+  readAllAt?: unknown;
+}
+
+/**
+ * READ_MESSAGE goes to the rooms the publisher chose: the reader, and the
+ * latest sender when the read made the message read by all. `response` stays
+ * the conversationId string for old clients, which take any READ_MESSAGE as
+ * "this chat is read for me"; new clients tell their own devices from the
+ * other side by `readerId` (CHAT-CONTRACT.md §1.3). A notice without a
+ * `readerId` (published by an older instance) goes out in the old shape.
+ */
+export const deliverReadMessage = (io: Server, notice: ReadMessageNotice): void => {
+  const rooms = Array.isArray(notice?.userIds)
+    ? [...new Set(notice.userIds.filter((room): room is string => typeof room === "string" && room.length > 0))]
+    : [];
+  // Never io.to([]): socket.io treats an empty room list as "everyone".
+  if (rooms.length === 0) return;
+  const payload: Record<string, unknown> = { type: "READ_MESSAGE", response: notice.conversationId };
+  if (notice.readerId !== undefined && notice.readerId !== null) {
+    payload.readerId = notice.readerId;
+    payload.readAt = notice.readAt ?? null;
+    payload.readAllAt = notice.readAllAt ?? null;
+  }
+  io.to(rooms).emit("CONVERSATION_LISTENING", payload);
+};
+
 export interface PaymentEvent {
   type: "PAYMENT";
   response: unknown;

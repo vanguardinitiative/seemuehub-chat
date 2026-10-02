@@ -4,7 +4,8 @@
  *
  * - POST /orders and POST /core-socket/payment are seemuehub-backend's; they
  *   require X-Internal-Key once CHAT_INTERNAL_KEY is set.
- * - PUT /message-status/read is for the conversation's participants only.
+ * - PUT /message-status/read is for the conversation's participants only
+ *   (the read itself: read-state.test.js).
  * - SYSTEM and ORDER_* are the service's own message types; REST refuses them.
  * - The boot log shows where Redis is, never its password.
  */
@@ -170,11 +171,15 @@ test("PUT /message-status/read", async (t) => {
   const other = oid();
   const conversationId = oid();
 
-  /** The participant filter each lookup used, and every write the handler made. */
+  /**
+   * The participant filter of each read (the read mark is one
+   * findOneAndUpdate scoped to the caller, see read-state.test.js), and every
+   * other write the handler made.
+   */
   const lookups = [];
   const writes = [];
   const restores = [
-    stub(conversationModel, "findOne", (filter) => {
+    stub(conversationModel, "findOneAndUpdate", (filter) => {
       lookups.push(filter);
       const isMember = String(filter._id) === conversationId && String(filter["participants.user"]) === me;
       return query(
@@ -183,17 +188,15 @@ test("PUT /message-status/read", async (t) => {
               _id: conversationId,
               conversationType: "PRIVATE",
               participants: [
-                { user: new Types.ObjectId(me), userType: "USER" },
+                { user: new Types.ObjectId(me), userType: "USER", lastReadAt: new Date() },
                 { user: new Types.ObjectId(other), userType: "USER" },
               ],
-              latestMessageData: { senderId: other, messageId: oid() },
+              // Already read by everyone: nothing more to mark.
+              latestMessageData: { senderId: other, messageId: oid(), readAllAt: new Date() },
             }
           : null
       );
     }),
-    // The latest message is already read by everyone: the handler answers
-    // before writing anything.
-    stub(messageModel, "findOne", () => query(null)),
     stub(messageModel, "updateMany", async () => void writes.push("messages")),
     stub(conversationModel, "updateOne", async () => void writes.push("conversation")),
   ];
@@ -226,9 +229,14 @@ test("PUT /message-status/read", async (t) => {
   });
 
   await t.test("a participant: answered as before", async () => {
+    published.length = 0;
     const res = await put(conversationId, tokenFor(me));
     assert.strictEqual(res.status, 200);
     assert.strictEqual(res.body.code, "CHAT-200");
+    assert.strictEqual(res.body.data.conversationId, conversationId);
+    assert.deepStrictEqual(writes, []);
+    const notices = published.filter((p) => p.channel === "READ_MESSAGE");
+    assert.deepStrictEqual(notices.map((p) => p.message.userIds), [[me]], "only the reader's own devices");
   });
 
   for (const restore of restores) restore();

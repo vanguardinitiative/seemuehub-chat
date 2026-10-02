@@ -151,6 +151,9 @@ test("a cancelled order's conversation can still be read by its participants", a
     stub(messageModel, "find", () =>
       query([{ _id: oid(), conversation: conversation._id, content: "Order ຖືກຍົກເລີກແລ້ວ", isOrderMessage: true }])
     ),
+    // GET /conversations/:id asks for the legacy read receipt of an unread
+    // latest message (latestMessageData.isRead, read-state.test.js).
+    stub(messageStatusModel, "find", () => query([])),
   ];
   const assertMembershipOnly = (expectedKeys) => {
     assert.strictEqual(lookups.length, 1);
