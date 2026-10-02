@@ -7,6 +7,24 @@ import { Request, Response } from "express";
 import mongoose, { Types } from "mongoose";
 import { StaffRole } from "./helper";
 import { participantOf, userIdOf } from "@/utils/conversation-access";
+import { isReadFor, type ReadStateConversation } from "@/utils/read-state";
+
+/**
+ * The caller's legacy MessageStatus verdict per message id: true for READ,
+ * false for UNREAD, absent when there is no row. Only group sends still write
+ * these rows; private reads live in `participants[].lastReadAt`.
+ */
+const legacyReadMap = async (messageIds: unknown[], userId: string): Promise<Map<string, boolean>> => {
+  const ids = messageIds.map((id) => (id == null ? "" : String(id))).filter((id) => Types.ObjectId.isValid(id));
+  const statusMap = new Map<string, boolean>();
+  if (ids.length === 0) return statusMap;
+  const statuses = await messageStatusModel
+    .find({ message: { $in: ids }, user: new Types.ObjectId(userId) })
+    .select("message status")
+    .lean<Array<{ message: Types.ObjectId; status: string }>>();
+  for (const status of statuses) statusMap.set(status.message.toString(), status.status === "READ");
+  return statusMap;
+};
 
 const createPrivateConversation = async (req: Request, res: Response): Promise<void> => {
   try {
@@ -236,10 +254,23 @@ const getConversation = async (req: Request, res: Response): Promise<void> => {
       res.status(404).json(messages.CONVERSATION_NOT_FOUND);
       return;
     }
+    // What res.json would have sent (toJSON), plus latestMessageData.isRead
+    // for the caller (CHAT-CONTRACT.md §1.4). The legacy MessageStatus row is
+    // only looked up when lastReadAt does not already settle it.
+    const data: any =
+      typeof (conversation as any).toJSON === "function" ? (conversation as any).toJSON() : { ...(conversation as any) };
+    if (data.latestMessageData) {
+      const messageId = data.latestMessageData.messageId;
+      let isRead = isReadFor(data, userId);
+      if (!isRead && messageId) {
+        isRead = isReadFor(data, userId, (await legacyReadMap([messageId], userId)).get(String(messageId)));
+      }
+      data.latestMessageData = { ...data.latestMessageData, isRead };
+    }
     res.status(200).json({
       code: messages.SUCCESSFULLY.code,
       message: messages.SUCCESSFULLY.message,
-      data: conversation,
+      data,
     });
     return;
   } catch (error) {
@@ -273,11 +304,13 @@ interface ILatestMessage {
   isRead?: boolean;
 }
 
-interface IConversationData {
+interface IConversationData extends ReadStateConversation {
   latestMessage?: ILatestMessage;
   latestMessageIsRead?: boolean;
   latestMessageData?: {
-    messageId: Types.ObjectId;
+    messageId?: Types.ObjectId | string;
+    senderId?: string;
+    sendAt?: Date;
     isRead?: boolean;
   };
   updatedAt: Date;
@@ -287,7 +320,6 @@ const getAllConversions = async (req: Request, res: Response): Promise<void> => 
   try {
     const { search, skip = "0", limit = "100", orderStatus } = req.query as QueryParams;
     const userId = (req as any).user.userId;
-    // console.log("data   ===> ", (req as any).user);
     const skipNumber = parseInt(skip, 10);
     const limitNumber = parseInt(limit, 10);
     const query: ConversationQuery = {
@@ -334,39 +366,26 @@ const getAllConversions = async (req: Request, res: Response): Promise<void> => 
       ];
     }
 
-    console.log("query  ===> ", query);
-
     const conversations = await conversationModel
       .find(query)
       .populate("participants.user", "userName phone email role profileImage isOnline isFreelancer displayName")
       .sort({ updatedAt: -1 })
       .lean<IConversationData[]>();
 
-    const messageIds = conversations
-      .map((c) => c.latestMessageData?.messageId)
-      .filter((id): id is Types.ObjectId => id != null);
+    const statusMap = await legacyReadMap(
+      conversations.map((c) => c.latestMessageData?.messageId),
+      userId
+    );
 
-    console.log("messageIds  ===> ", messageIds);
-    const messageStatuses = await messageStatusModel
-      .find({
-        message: { $in: messageIds },
-        user: new Types.ObjectId(userId),
-      })
-      .select("message status")
-      .lean<Array<{ message: Types.ObjectId; status: string }>>();
-
-    console.log("messageStatuses  ===> ", messageStatuses);
-    const statusMap = new Map<string, boolean>();
-    messageStatuses.forEach((status) => {
-      statusMap.set(status.message.toString(), status.status === "READ");
-    });
-    console.log("statusMap  ===> ", statusMap);
-
+    // isRead is the caller's: they sent the latest message, or their
+    // participants[].lastReadAt covers it, or (groups) its MessageStatus row
+    // says READ. participants[].lastReadAt goes out as is (CHAT-CONTRACT.md §1.4).
     const conversationData = conversations.map((conversation) => {
-      if (conversation.latestMessageData?.messageId) {
+      if (conversation.latestMessageData) {
+        const messageId = conversation.latestMessageData.messageId;
         conversation.latestMessageData = {
           ...conversation.latestMessageData,
-          isRead: statusMap.get(conversation.latestMessageData.messageId.toString()) || false,
+          isRead: isReadFor(conversation, userId, messageId ? statusMap.get(messageId.toString()) : undefined),
         };
       }
       return conversation;

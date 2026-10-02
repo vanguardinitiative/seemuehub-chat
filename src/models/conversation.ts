@@ -42,6 +42,13 @@ export interface IParticipant {
   userType: UserType;
   joinDate: Date;
   isMuted: boolean;
+  /**
+   * When this participant last read the conversation (CHAT-CONTRACT.md §1.1):
+   * everything sent at or before it counts as read by them. Written only by
+   * PUT /message-status/read (a $max, so it never moves back) and by
+   * scripts/backfill-read-state.ts. Absent until the first read.
+   */
+  lastReadAt?: Date;
 }
 
 interface ILatestMessageData {
@@ -119,6 +126,9 @@ const conversationSchema = new Schema<IConversation>(
         },
         joinDate: { type: Date, default: Date.now },
         isMuted: { type: Boolean, default: false },
+        // No default and no index: absent means "never read here". It has to
+        // be in the schema, or mongoose strips the read PUT's update.
+        lastReadAt: Date,
       },
     ],
     latestMessageData: {
