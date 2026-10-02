@@ -12,7 +12,7 @@ const mongoose = require("mongoose");
 const { Types } = mongoose;
 
 const { env } = require("../dist/config/env.js");
-const { chatPushBodies, pushChatMessage, pushReaction, reactionPushBody, snippetOf, CHAT_PUSH_PATH } = require("../dist/services/chat-push.js");
+const { chatPushBodies, imageUrlOf, pushChatMessage, pushReaction, reactionPushBody, snippetOf, CHAT_PUSH_PATH } = require("../dist/services/chat-push.js");
 const { sendPrivateMessage } = require("../dist/controllers/message/index.js");
 const { conversationModel } = require("../dist/models/conversation.js");
 const { messageModel } = require("../dist/models/message.js");
@@ -73,15 +73,29 @@ test("chatPushBodies", async (t) => {
 
   await t.test("a private TEXT message: the other participant, with the text as the snippet", () => {
     const conversation = conversationOf(sender, receiver);
-    assert.deepStrictEqual(chatPushBodies(conversation, messageFrom(sender, { content: "  see you\n at  noon " })), [
+    const message = messageFrom(sender, { content: "  see you\n at  noon " });
+    assert.deepStrictEqual(chatPushBodies(conversation, message), [
       {
         conversationId: String(conversation._id),
         senderId: sender,
         recipientIds: [receiver],
         messageType: "TEXT",
         snippet: "see you at noon",
+        messageId: String(message._id),
       },
     ]);
+  });
+
+  await t.test("rich fields: the conversation's type, and a photo's or a sticker's picture", () => {
+    const conversation = { ...conversationOf(sender, receiver), conversationType: "PRIVATE" };
+    const photo = "https://bucket.s3.ap-southeast-1.amazonaws.com/images/p.jpg";
+    const image = chatPushBodies(conversation, messageFrom(sender, { messageType: "IMAGE", content: "", attachments: [{ fileUrl: photo }] }))[0];
+    assert.strictEqual(image.conversationType, "PRIVATE");
+    assert.strictEqual(image.imageUrl, photo);
+    const sticker = chatPushBodies(conversation, messageFrom(sender, { messageType: "STICKER", content: photo }))[0];
+    assert.strictEqual(sticker.imageUrl, photo);
+    const text = chatPushBodies(conversation, messageFrom(sender, { content: photo }))[0];
+    assert.ok(!("imageUrl" in text), "a text message never carries a picture, even when it is a URL");
   });
 
   await t.test("never the sender, whichever side sends", () => {
@@ -125,6 +139,17 @@ test("chatPushBodies", async (t) => {
   await t.test("nothing at all for a missing conversation or message", () => {
     assert.deepStrictEqual(chatPushBodies(null, messageFrom(sender)), []);
     assert.deepStrictEqual(chatPushBodies(conversationOf(sender, receiver), null), []);
+  });
+});
+
+test("imageUrlOf", async (t) => {
+  await t.test("only http(s) URLs, only for IMAGE and STICKER", () => {
+    assert.strictEqual(imageUrlOf({ messageType: "IMAGE", attachments: [{ fileUrl: "https://x/a.jpg" }] }), "https://x/a.jpg");
+    assert.strictEqual(imageUrlOf({ messageType: "IMAGE", attachments: [{ fileUrl: "file:///a.jpg" }] }), undefined);
+    assert.strictEqual(imageUrlOf({ messageType: "IMAGE" }), undefined);
+    assert.strictEqual(imageUrlOf({ messageType: "STICKER", content: "STICKER", attachments: [{ fileUrl: "https://x/s.png" }] }), "https://x/s.png");
+    assert.strictEqual(imageUrlOf({ messageType: "VIDEO", attachments: [{ fileUrl: "https://x/v.mp4" }] }), undefined);
+    assert.strictEqual(imageUrlOf({ messageType: "IMAGE", attachments: [{ fileUrl: `https://x/${"a".repeat(2100)}` }] }), undefined);
   });
 });
 
@@ -259,13 +284,15 @@ test("a private message stored through NEW_MESSAGE", async (t) => {
     assert.deepStrictEqual(emitted, [], "no ERROR: the message was stored");
     assert.strictEqual(posted.length, 1);
     assert.strictEqual(posted[0].url, "https://api.example.test/api/v1/internal/push/chat");
-    assert.deepStrictEqual(posted[0].body, {
+    const { messageId, ...body } = posted[0].body;
+    assert.deepStrictEqual(body, {
       conversationId: String(conversation._id),
       senderId: sender,
       recipientIds: [receiver],
       messageType: "TEXT",
       snippet: "hi there",
     });
+    assert.ok(typeof messageId === "string" && messageId.length > 0, "the stored message's id");
     assert.strictEqual(posted[0].options.headers["X-Internal-Key"], "test-key");
   });
 
