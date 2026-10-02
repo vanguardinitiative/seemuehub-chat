@@ -187,7 +187,13 @@ test("REST sends: STICKER", async (t) => {
         const [url, base] = target();
         const res = await post(port, url, { token, body: { ...base, messageType: "STICKER", content: "STICKER", attachments } });
         assert.strictEqual(res.status, 400);
-        assert.deepStrictEqual(res.body, { code: "CHAT-400", message: "Invalid sticker" });
+        // The CHAT-400 fields as before, with the specific code in errors.code.
+        assert.deepStrictEqual(res.body, {
+          success: false,
+          code: "CHAT-400",
+          message: "Invalid sticker",
+          errors: { code: "INVALID_STICKER", message: "Invalid sticker" },
+        });
         assert.deepStrictEqual(lookups, []);
         assert.deepStrictEqual(created, []);
       }

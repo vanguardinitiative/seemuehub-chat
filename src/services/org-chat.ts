@@ -333,8 +333,11 @@ export const listConversations = async (organizationId: string, actorUserId: str
     .skip(skip)
     .limit(limit)
     .lean();
-  return { conversations: (conversations as any[]).map((conversation) => ({ ...conversation, unread: orgUnread(conversation) })) };
+  return { conversations: (conversations as any[]).map(forCompany) };
 };
+
+/** The inbox's view of one conversation: the candidate's public fields only, and the company side's `unread`. */
+const forCompany = (conversation: any) => ({ ...conversation, unread: orgUnread(conversation) });
 
 /** A company conversation by id, with what the routes below read. Null for any other conversation. */
 const findOrgConversation = async (conversationId: string) => {
@@ -344,6 +347,25 @@ const findOrgConversation = async (conversationId: string) => {
 };
 
 const notFound = () => new OrgChatRefusal(404, "CONVERSATION_NOT_FOUND", "Conversation not found");
+
+/**
+ * GET /organizations/conversations/:id: one company conversation, exactly as
+ * an item of the inbox list (candidate with public fields only, `unread`,
+ * `candidateBlockedAt`, `basis`, `jobId`, `organization`), for a room opened
+ * by link or beyond the list's first page.
+ */
+export const getConversation = async (conversationId: string, actorUserId: string) => {
+  if (!orgChatEnabled()) throw disabled();
+  const found = await findOrgConversation(conversationId);
+  if (!found) throw notFound();
+  await requireMember(organizationOf(found)!, actorUserId, "READ", { hideNotMember: true });
+  const conversation = await conversationModel
+    .findOne({ _id: found._id })
+    .populate("participants.user", CANDIDATE_PUBLIC_FIELDS)
+    .lean();
+  if (!conversation) throw notFound();
+  return { conversation: forCompany(conversation) };
+};
 
 /** A page size as the participant list takes it: 30 by default, at most 100. */
 const pageOf = (skip: unknown, limit: unknown) => ({

@@ -1,9 +1,10 @@
 import { Router, type Request, type Response } from "express";
 import { checkAuthorizationMiddleware } from "@/middleware";
-import { messages } from "@/config";
+import { messages, withErrorCode } from "@/config";
 import { isObjectIdString } from "@/utils/ids";
 import {
   OrgChatRefusal,
+  getConversation,
   listConversations,
   listMessages,
   openConversation,
@@ -15,7 +16,7 @@ import {
  * A company's side of its conversations with candidates
  * (worktrees/ORG-CHAT-CONTRACT.md §3.2; the rules are src/services/org-chat.ts).
  * Answers `{ success, data }`, or `{ success: false, errors: { code, message } }`
- * as these routes always did.
+ * as these routes always did: `errors.code` is always the specific code.
  */
 const router = Router();
 const uid = (req: Request) => String((req as any).user?.userId ?? (req as any).user?.id);
@@ -26,9 +27,11 @@ const fail = (res: Response, status: number, code: string, message?: string) =>
 /** A refusal as its status and code; anything else is the 500 these routes always gave. */
 const handle = (res: Response, error: unknown, what: string) => {
   if (error instanceof OrgChatRefusal) {
-    // The message-type and sticker refusals keep the CHAT-400 shape the routes used.
-    if (error.code === "INVALID_MESSAGE_TYPE") return void res.status(400).json(messages.INVALID_MESSAGE_TYPE);
-    if (error.code === "INVALID_STICKER") return void res.status(400).json(messages.INVALID_STICKER);
+    // The message-type and sticker refusals keep the CHAT-400 fields these
+    // routes always had, with the envelope's own two beside them.
+    if (error.code === "INVALID_MESSAGE_TYPE" || error.code === "INVALID_STICKER") {
+      return void res.status(400).json({ success: false, ...withErrorCode(messages[error.code], error.code) });
+    }
     return fail(res, error.status, error.code, error.message);
   }
   console.error(`${what} failed`, error instanceof Error ? error.message : error);
@@ -61,6 +64,15 @@ router.post("/:id/conversations", async (req: Request, res: Response) => {
     res.status(status).json({ success: true, data: { conversation, message } });
   } catch (error) {
     handle(res, error, "organization conversation open");
+  }
+});
+
+/** One company conversation, in the shape of an inbox item. */
+router.get("/conversations/:conversationId", async (req: Request, res: Response) => {
+  try {
+    res.json({ success: true, data: await getConversation(String(req.params.conversationId), uid(req)) });
+  } catch (error) {
+    handle(res, error, "organization conversation read");
   }
 });
 

@@ -321,6 +321,7 @@ ORG_CHAT_UNAVAILABLE`.
 | --- | --- |
 | `POST /organizations/:id/conversations` `{ candidateUserId, basis, applicationId?, matchId?, firstMessage }` | a member who may OPEN on that basis: `201` new, `200` into the existing one |
 | `GET /organizations/:id/conversations?skip&limit` | LIST; each item has `unread` |
+| `GET /organizations/conversations/:id` | READ; one conversation, shaped as a list item |
 | `GET /organizations/conversations/:id/messages?before&skip&limit` | READ |
 | `POST /organizations/conversations/:id/messages`, `POST /messages` with `sendAsOrganizationId` | SEND |
 | `PUT /organizations/conversations/:id/read` | READ |
@@ -334,7 +335,10 @@ reach that room. Pushes go to the candidate as the company (`audience:
 "CANDIDATE"`, not when muted) and to the company for the candidate's replies
 (`audience: "ORGANIZATION"`). After a block nobody sends and the company
 cannot reopen. Errors are `{ success: false, errors: { code, message } }`
-(`ORG_CHAT_*`, 403; `ORG_CHAT_DAILY_LIMIT`, 429).
+(`ORG_CHAT_*`, 403; `ORG_CHAT_DAILY_LIMIT`, 429); mute and block keep the
+participant routes' `{ code: "CHAT-4xx", message }` and add the same
+`errors`. Every refusal, 401 included, carries its specific code in
+`errors.code`.
 
 With `ORG_CHAT_ENABLED` off, opening and the new routes answer `403
 ORG_CHAT_DISABLED`; the company list and send keep their old rule (an

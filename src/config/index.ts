@@ -114,6 +114,16 @@ export const messages = {
   //github change
 };
 
+/**
+ * `body` (one of `messages`) with the specific code a client branches on in
+ * `errors.code`, as the organization routes answer. Additive: `code`
+ * ("CHAT-4xx") and `message` stay what they were.
+ */
+export const withErrorCode = <T extends { code: string; message: string }>(body: T, errorCode: string) => ({
+  ...body,
+  errors: { code: errorCode, message: body.message },
+});
+
 export interface IErrorResponse {
   code: string;
   message: string;

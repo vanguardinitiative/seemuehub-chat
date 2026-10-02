@@ -544,6 +544,60 @@ test("GET /organizations/conversations/:id/messages: the company's view, newest 
   }
 });
 
+test("GET /organizations/conversations/:id: one conversation, shaped as an inbox item", async () => {
+  const conversation = orgConversation({
+    jobId: JOB,
+    candidateBlockedAt: new Date("2026-10-01T00:00:00Z"),
+    latestMessageData: { senderId: CANDIDATE, messageId: oid(), sendAt: new Date(Date.now() - 1000), readAllAt: null, isDeleted: false },
+  });
+  const privateChat = { _id: oid(), conversationType: "PRIVATE", participants: [{ user: MEMBER }, { user: STRANGER }], latestMessageData: {} };
+  const world = setup({ seed: { conversations: [conversation, privateChat] } });
+  try {
+    const url = (id) => `/v1/api/organizations/conversations/${id}`;
+    const res = await request(port, "GET", url(conversation._id), { as: MEMBER });
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.body.success, true);
+    const item = res.body.data.conversation;
+    assert.strictEqual(item._id, conversation._id);
+    assert.strictEqual(item.unread, true);
+    assert.strictEqual(item.candidateBlockedAt, "2026-10-01T00:00:00.000Z");
+    assert.strictEqual(item.basis, "APPLICATION");
+    assert.strictEqual(item.jobId, JOB);
+    assert.strictEqual(item.candidateUserId, CANDIDATE);
+    assert.deepStrictEqual(item.organization, { name: ORGANIZATION.name, nameLao: ORGANIZATION.nameLao, logo: ORGANIZATION.logo, slug: ORGANIZATION.slug });
+
+    // The same item the list answers, and the same populate (no email).
+    const list = await request(port, "GET", `/v1/api/organizations/${ORG}/conversations`, { as: MEMBER });
+    assert.deepStrictEqual(item, list.body.data.conversations.find((c) => c._id === conversation._id));
+    const populates = world.calls.populate.filter(([pathName]) => pathName === "participants.user").map(([, fields]) => fields);
+    assert.strictEqual(new Set(populates).size, 1);
+    assert.ok(!populates[0].split(" ").includes("email"));
+    assert.deepStrictEqual(world.backend.authorizations().map((a) => a.action), ["READ"], "READ, then LIST from the 60 s cache");
+
+    for (const [id, as] of [
+      [conversation._id, STRANGER],
+      [privateChat._id, MEMBER],
+      [oid(), MEMBER],
+      ["not-an-id", MEMBER],
+    ]) {
+      const refused = await request(port, "GET", url(id), { as });
+      assert.strictEqual(refused.status, 404);
+      assert.deepStrictEqual(refused.body, { success: false, errors: { code: "CONVERSATION_NOT_FOUND", message: "Conversation not found" } });
+    }
+  } finally {
+    world.restore();
+  }
+
+  const off = setup({ enabled: "false", seed: { conversations: [orgConversation()] } });
+  try {
+    const res = await request(port, "GET", `/v1/api/organizations/conversations/${off.db.conversations[0]._id}`, { as: MEMBER });
+    assert.strictEqual(res.status, 403);
+    assert.strictEqual(res.body.errors.code, "ORG_CHAT_DISABLED");
+  } finally {
+    off.restore();
+  }
+});
+
 // ---------------------------------------------------------------- org read
 
 test("PUT /organizations/conversations/:id/read: the company read", async (t) => {
@@ -809,6 +863,98 @@ test("GET /messages/admin carries the company of a company conversation (ORG-CHA
     admin();
     world.restore();
   }
+});
+
+// ---------------------------------------------------------------- error envelopes
+
+test("every org-chat route puts the specific code in errors.code", async (t) => {
+  const conversation = orgConversation();
+  const blocked = orgConversation({ candidateUserId: oid(), candidateBlockedAt: new Date() });
+  blocked.participants = [{ user: blocked.candidateUserId, userType: "USER", isMuted: false }];
+  const id = conversation._id;
+  const routes = [
+    ["POST", `/v1/api/organizations/${ORG}/conversations`, openBody()],
+    ["GET", `/v1/api/organizations/${ORG}/conversations`],
+    ["GET", `/v1/api/organizations/conversations/${id}`],
+    ["GET", `/v1/api/organizations/conversations/${id}/messages`],
+    ["POST", `/v1/api/organizations/conversations/${id}/messages`, { body: "hi" }],
+    ["PUT", `/v1/api/organizations/conversations/${id}/read`],
+    ["POST", "/v1/api/messages", { conversationId: id, body: "hi" }],
+    ["PUT", `/v1/api/conversations/${id}/mute`, { muted: true }],
+    ["POST", `/v1/api/conversations/${id}/block`],
+  ];
+
+  await t.test("401 without a token (UNAUTHORIZED), the CHAT-401 fields kept", async () => {
+    const world = setup({ seed: { conversations: [conversation] } });
+    try {
+      for (const [method, url, body] of routes) {
+        const res = await request(port, method, url, { body });
+        assert.strictEqual(res.status, 401, url);
+        assert.deepStrictEqual(res.body, {
+          code: "CHAT-401",
+          message: "Unauthorized",
+          detail: "Invalid signature",
+          errors: { code: "UNAUTHORIZED", message: "Unauthorized" },
+        });
+      }
+    } finally {
+      world.restore();
+    }
+  });
+
+  await t.test("switched off: ORG_CHAT_DISABLED on open and on every route that is new", async () => {
+    const world = setup({ enabled: "false", seed: { conversations: [conversation] } });
+    try {
+      for (const [method, url, as, body] of [
+        ["POST", `/v1/api/organizations/${ORG}/conversations`, MEMBER, openBody()],
+        ["GET", `/v1/api/organizations/conversations/${id}`, MEMBER],
+        ["GET", `/v1/api/organizations/conversations/${id}/messages`, MEMBER],
+        ["PUT", `/v1/api/organizations/conversations/${id}/read`, MEMBER],
+        ["PUT", `/v1/api/conversations/${id}/mute`, CANDIDATE, { muted: true }],
+        ["POST", `/v1/api/conversations/${id}/block`, CANDIDATE],
+      ]) {
+        const res = await request(port, method, url, { as, body });
+        assert.strictEqual(res.status, 403, url);
+        assert.strictEqual(res.body.errors.code, "ORG_CHAT_DISABLED", url);
+        assert.strictEqual(res.body.errors.message, "ການແຊັດກັບບໍລິສັດຍັງບໍ່ເປີດໃຫ້ໃຊ້", url);
+      }
+    } finally {
+      world.restore();
+    }
+  });
+
+  await t.test("each refusal, route by route", async () => {
+    const world = setup({ seed: { conversations: [conversation, blocked] } });
+    try {
+      const cases = [
+        ["POST", `/v1/api/organizations/${ORG}/conversations`, MEMBER, openBody({ basis: "X" }), 400, "VALIDATION_ERROR"],
+        ["POST", `/v1/api/organizations/not-an-id/conversations`, MEMBER, openBody(), 400, "VALIDATION_ERROR"],
+        ["GET", `/v1/api/organizations/${ORG}/conversations`, STRANGER, undefined, 403, "ORG_CHAT_NOT_MEMBER"],
+        ["GET", `/v1/api/organizations/conversations/${id}/messages?before=yesterday`, MEMBER, undefined, 400, "VALIDATION_ERROR"],
+        ["POST", `/v1/api/organizations/conversations/${id}/messages`, MEMBER, { body: "hi", messageType: "SYSTEM" }, 400, "INVALID_MESSAGE_TYPE"],
+        ["POST", `/v1/api/organizations/conversations/${id}/messages`, MEMBER, { messageType: "STICKER", attachments: [] }, 400, "INVALID_STICKER"],
+        ["POST", `/v1/api/organizations/conversations/${id}/messages`, MEMBER, { body: " " }, 400, "VALIDATION_ERROR"],
+        ["POST", `/v1/api/organizations/conversations/${blocked._id}/messages`, MEMBER, { body: "hi" }, 403, "ORG_CHAT_BLOCKED"],
+        ["PUT", `/v1/api/organizations/conversations/${id}/read`, STRANGER, undefined, 404, "CONVERSATION_NOT_FOUND"],
+        ["POST", "/v1/api/messages", CANDIDATE, { conversationId: id, body: "hi", messageType: "SYSTEM" }, 400, "INVALID_MESSAGE_TYPE"],
+        ["POST", "/v1/api/messages", STRANGER, { conversationId: id, body: "hi" }, 404, "CONVERSATION_NOT_FOUND"],
+        ["POST", "/v1/api/messages", MEMBER, { conversationId: id, sendAsOrganizationId: oid(), body: "hi" }, 403, "ORGANIZATION_CONVERSATION_MISMATCH"],
+        ["POST", "/v1/api/messages", blocked.candidateUserId, { conversationId: blocked._id, body: "hi" }, 403, "ORG_CHAT_BLOCKED"],
+        ["PUT", `/v1/api/conversations/not-an-id/mute`, CANDIDATE, { muted: true }, 400, "VALIDATION_ERROR"],
+        ["PUT", `/v1/api/conversations/${id}/mute`, CANDIDATE, { muted: "yes" }, 400, "VALIDATION_ERROR"],
+        ["PUT", `/v1/api/conversations/${id}/mute`, STRANGER, { muted: true }, 404, "CONVERSATION_NOT_FOUND"],
+        ["POST", `/v1/api/conversations/${id}/block`, STRANGER, undefined, 404, "CONVERSATION_NOT_FOUND"],
+      ];
+      for (const [method, url, as, body, status, code] of cases) {
+        const res = await request(port, method, url, { as, body });
+        assert.strictEqual(res.status, status, `${method} ${url}`);
+        assert.strictEqual(res.body.errors?.code, code, `${method} ${url}`);
+        assert.strictEqual(typeof res.body.errors.message, "string", `${method} ${url}`);
+      }
+    } finally {
+      world.restore();
+    }
+  });
 });
 
 // ---------------------------------------------------------------- .save()
