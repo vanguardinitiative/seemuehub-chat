@@ -44,7 +44,8 @@ export interface SocketDeps {
  * Message fields no client may set. The controllers spread the payload into
  * the stored message, so without this a sender could post "as" an
  * organization (sendAsOrganizationId, which REST only allows to its members),
- * as another actor, or as a system order message.
+ * as another actor, as a system order message, or with a made-up quote or
+ * reactions.
  */
 const RESERVED_MESSAGE_FIELDS = [
   "sender",
@@ -59,6 +60,10 @@ const RESERVED_MESSAGE_FIELDS = [
   "deletedBy",
   "deliveredAllAt",
   "readAllAt",
+  // The service builds a reply's preview from the stored target
+  // (utils/reply.ts), and only REACT_MESSAGE writes reactions.
+  "replyPreview",
+  "reactions",
 ] as const;
 
 const isObjectId = (value: unknown): value is string =>
