@@ -6,6 +6,9 @@ import { conversationModel } from "@/models/conversation";
 import { messageModel, MessageType } from "@/models/message";
 import { orderStepMessage } from "./step-message";
 
+/** A mongoose document as res.json / JSON.stringify would see it; anything else as is. */
+const plain = (value: any) => (value && typeof value.toJSON === "function" ? value.toJSON() : value);
+
 // Handle order status update - creates automatic message and updates conversation
 const handleOrderStatusUpdate = async (orderData: {
   orderId: string | mongoose.Types.ObjectId;
@@ -15,10 +18,9 @@ const handleOrderStatusUpdate = async (orderData: {
 }): Promise<{ message: any; conversation: any } | null> => {
   try {
     const { orderId, orderStatus, orderSender, _id } = orderData;
-    console.log("_id===>", _id);
 
     if (!orderId || !orderStatus) {
-      console.log("⚠️ OrderId or status missing");
+      console.warn("Order step not stored: orderId or orderStep missing", { orderId, conversationId: _id });
       return null;
     }
 
@@ -35,7 +37,6 @@ const handleOrderStatusUpdate = async (orderData: {
       createdAt: new Date(),
       sendAt: new Date(),
     });
-    console.log("🔔 orderMessage===>", orderMessage);
 
     // Update conversation with latest message and order status
     const updatedConversation = await conversationModel.findByIdAndUpdate(
@@ -54,7 +55,6 @@ const handleOrderStatusUpdate = async (orderData: {
       },
       { new: true }
     );
-    console.log("🔔 updatedConversation===>", updatedConversation);
 
     // Publish message to trigger notifications
     await pub.publish(
@@ -64,8 +64,6 @@ const handleOrderStatusUpdate = async (orderData: {
         messageData: orderMessage,
       })
     );
-
-    console.log(`✅ Order status message created for order ${orderId}: ${orderStatus}`);
 
     return {
       message: orderMessage,
@@ -79,17 +77,25 @@ const handleOrderStatusUpdate = async (orderData: {
 
 export const orderController = async (req: Request, res: Response): Promise<void> => {
   try {
+    // The order's conversation as seemuehub-backend saw it, before this step.
     const orderData = req.body;
-    console.log("orderData===>", orderData.latestMessageData.orderStep);
+    let notice = orderData;
     // Create automatic message if orderId and status are provided
     if (orderData.orderId) {
       try {
-        await handleOrderStatusUpdate({
+        const stored = await handleOrderStatusUpdate({
           orderId: orderData.orderId,
-          orderStatus: orderData.latestMessageData.orderStep,
+          orderStatus: orderData.latestMessageData?.orderStep,
           orderSender: orderData.orderSender,
           _id: orderData._id,
         });
+        // ORDER carries the conversation's latest message as it is now, with
+        // the step's message in it, instead of the backend's copy from before
+        // the step (CHAT-CONTRACT.md §1.5). Clients still refetch on ORDER.
+        const fresh = plain(stored?.conversation);
+        if (fresh?.latestMessageData) {
+          notice = { ...orderData, latestMessageData: fresh.latestMessageData, updatedAt: fresh.updatedAt ?? orderData.updatedAt };
+        }
       } catch (error) {
         console.error("Error in handleOrderStatusUpdate:", error);
         // Continue to publish ORDER notification even if message creation fails
@@ -97,11 +103,11 @@ export const orderController = async (req: Request, res: Response): Promise<void
     }
 
     // Publish ORDER notification to Redis for socket.io notifications
-    pub.publish("ORDER", JSON.stringify(orderData));
+    pub.publish("ORDER", JSON.stringify(notice));
     res.status(200).json(messages.SUCCESSFULLY);
     return;
   } catch (error) {
-    console.log("Error in orderController:", error);
+    console.error("Error in orderController:", error);
     res.status(500).json(messages.INTERNAL_SERVER_ERROR);
     return;
   }
