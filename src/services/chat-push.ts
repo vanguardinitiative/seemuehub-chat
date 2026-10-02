@@ -20,7 +20,7 @@ import { isReaction } from "@/utils/reactions";
 export const CHAT_PUSH_PATH = "/api/v1/internal/push/chat";
 export const CHAT_PUSH_TIMEOUT_MS = 3_000;
 /** The backend's limits (chat-push.schema.ts there). */
-export const CHAT_PUSH_LIMITS = { recipients: 50, snippet: 140 } as const;
+export const CHAT_PUSH_LIMITS = { recipients: 50, snippet: 140, messageId: 64, imageUrl: 2048 } as const;
 
 export interface ChatPushBody {
   conversationId: string;
@@ -28,17 +28,28 @@ export interface ChatPushBody {
   recipientIds: string[];
   messageType: string;
   snippet?: string;
+  /**
+   * For rich notifications (PUSH-CONTRACT.md §10), all optional: the stored
+   * message's id, the conversation's type (an ANONYMOUS one names nobody),
+   * and an IMAGE's photo or a STICKER's picture for the notification to show.
+   */
+  messageId?: string;
+  conversationType?: string;
+  imageUrl?: string;
 }
 
 /** The fields of a stored conversation and message this reads. */
 export interface PushConversation {
   _id: unknown;
+  conversationType?: unknown;
   participants?: { user?: unknown; isMuted?: boolean }[];
 }
 export interface PushMessage {
+  _id?: unknown;
   sender?: unknown;
   messageType?: unknown;
   content?: unknown;
+  attachments?: { fileUrl?: unknown }[];
   isOrderMessage?: boolean;
 }
 
@@ -47,6 +58,31 @@ const idOf = (value: unknown): string | null => {
   if (id === null || id === undefined) return null;
   const text = String(id);
   return Types.ObjectId.isValid(text) && /^[0-9a-fA-F]{24}$/.test(text) ? text : null;
+};
+
+/** A message id as text: an ObjectId or a client's custom id, at most 64 characters. */
+const messageIdOf = (value: unknown): string | undefined => {
+  if (value === null || value === undefined) return undefined;
+  const text = String(value).trim();
+  return text && text.length <= CHAT_PUSH_LIMITS.messageId ? text : undefined;
+};
+
+const httpUrl = (value: unknown): string | undefined =>
+  typeof value === "string" && /^https?:\/\//i.test(value.trim()) && value.trim().length <= CHAT_PUSH_LIMITS.imageUrl
+    ? value.trim()
+    : undefined;
+
+/**
+ * The picture a notification may show for this message: an IMAGE's first
+ * attachment, a STICKER's attachment (or, for older stickers, its content when
+ * that is a URL). Nothing for any other type. The backend still decides
+ * whether it is one of our own images. Pure.
+ */
+export const imageUrlOf = (message: PushMessage): string | undefined => {
+  const first = Array.isArray(message.attachments) ? message.attachments[0] : undefined;
+  if (message.messageType === "IMAGE") return httpUrl(first?.fileUrl);
+  if (message.messageType === "STICKER") return httpUrl(first?.fileUrl) ?? httpUrl(message.content);
+  return undefined;
 };
 
 /** A TEXT message's text for the lock screen: whitespace folded, at most 140 characters (not UTF-16 units). */
@@ -86,6 +122,9 @@ export const chatPushBodies = (conversation: PushConversation | null | undefined
   if (recipients.length === 0) return [];
 
   const snippet = message.messageType === "TEXT" ? snippetOf(message.content) : undefined;
+  const messageId = messageIdOf(message._id);
+  const conversationType = typeof conversation.conversationType === "string" ? conversation.conversationType : undefined;
+  const imageUrl = imageUrlOf(message);
   const bodies: ChatPushBody[] = [];
   for (let i = 0; i < recipients.length; i += CHAT_PUSH_LIMITS.recipients) {
     bodies.push({
@@ -94,6 +133,9 @@ export const chatPushBodies = (conversation: PushConversation | null | undefined
       recipientIds: recipients.slice(i, i + CHAT_PUSH_LIMITS.recipients),
       messageType: message.messageType,
       ...(snippet ? { snippet } : {}),
+      ...(messageId ? { messageId } : {}),
+      ...(conversationType ? { conversationType } : {}),
+      ...(imageUrl ? { imageUrl } : {}),
     });
   }
   return bodies;
