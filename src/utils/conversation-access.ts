@@ -2,6 +2,8 @@ import type { Request } from "express";
 import { Types } from "mongoose";
 
 import { conversationModel } from "@/models/conversation";
+import { env } from "@/config/env";
+import { orgRoomOf } from "@/socket/rooms";
 import { idString } from "@/utils/ids";
 
 /**
@@ -98,4 +100,47 @@ export const membersOf = async (conversationId: string, userId: string): Promise
     if (id && !members.has(id)) members.set(id, { userId: id, isMuted: participant.isMuted === true });
   }
   return [...members.values()];
+};
+
+/**
+ * TYPING's audience (socket/handlers.ts): `membersOf` plus company
+ * conversations (ORG-CHAT-CONTRACT.md §3.4). One findOne, still with access in
+ * the filter: the caller must be a participant, or be in the org room
+ * (joined at SETUP after the backend's LIST) of the conversation's
+ * organization.
+ *
+ * - A participant hears as before; in a company conversation (the
+ *   candidate), the company's org room hears them too.
+ * - A member typing for the company is heard by the participants (the
+ *   candidate).
+ * - Anyone else: null. With ORG_CHAT_ENABLED off, exactly membersOf.
+ */
+export const audienceOf = async (
+  conversationId: string,
+  userId: string,
+  orgRooms: readonly string[]
+): Promise<{ participant: boolean; others: string[]; orgRoom: string | null } | null> => {
+  const enabled = env.ORG_CHAT_ENABLED === "true";
+  const organizationIds = enabled
+    ? orgRooms
+        .filter((room) => /^org:[0-9a-f]{24}$/.test(room))
+        .map((room) => new Types.ObjectId(room.slice("org:".length)))
+    : [];
+  const conversation = await conversationModel
+    .findOne({
+      _id: conversationId,
+      ...(organizationIds.length > 0
+        ? { $or: [participantOf(userId), { organizationId: { $in: organizationIds } }] }
+        : participantOf(userId)),
+    })
+    .select("participants.user organizationId")
+    .lean();
+  if (!conversation) return null;
+
+  const ids = [...new Set((conversation.participants ?? []).map((participant) => idString(participant?.user)).filter((id): id is string => Boolean(id)))];
+  const participant = ids.includes(userId);
+  const orgRoom = enabled ? orgRoomOf(conversation.organizationId) : null;
+  if (participant) return { participant: true, others: ids.filter((id) => id !== userId), orgRoom };
+  // Matched through the org room: a member typing for the company.
+  return orgRoom ? { participant: false, others: ids, orgRoom: null } : null;
 };

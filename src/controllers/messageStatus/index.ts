@@ -9,10 +9,13 @@ import { participantOf, userIdOf } from "@/utils/conversation-access";
 import { allOthersRead, covers, participantIdOf } from "@/utils/read-state";
 import { deliveryMoves, otherParticipants } from "@/utils/delivered";
 import { publishDelivered } from "@/services/delivered";
+import { orgRoomOf } from "@/socket/rooms";
+import { env } from "@/config/env";
 
 interface ReadConversation {
   _id: mongoose.Types.ObjectId;
   conversationType?: string;
+  organizationId?: unknown;
   participants?: Array<Partial<IParticipant>>;
   latestMessageData?: {
     senderId?: string;
@@ -151,6 +154,10 @@ const updateReadStatus = async (req: Request, res: Response): Promise<void> => {
     ) {
       userIds.push(senderId);
     }
+    // A candidate's read of a company conversation: the company's inbox hears
+    // it too (ORG-CHAT-CONTRACT.md §3.4), on its org room. Its members are
+    // not participants, so they are never in userIds.
+    const orgRoom = env.ORG_CHAT_ENABLED === "true" ? orgRoomOf(before.organizationId) : null;
     void pub.publish(
       "READ_MESSAGE",
       JSON.stringify({
@@ -159,6 +166,7 @@ const updateReadStatus = async (req: Request, res: Response): Promise<void> => {
         readerId,
         readAt: lastReadAt.toISOString(),
         readAllAt: readAllAt ? readAllAt.toISOString() : null,
+        ...(orgRoom ? { orgRoom } : {}),
       })
     );
 

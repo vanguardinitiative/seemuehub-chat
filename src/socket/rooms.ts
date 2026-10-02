@@ -7,8 +7,19 @@ import { dataOf, logEvent, type SocketAuthMode } from "./auth";
  *
  * Rooms: every socket that completed SETUP is in its user's room (the userId),
  * and optionally in one conversation room (the conversationId) it proved it
- * belongs to.
+ * belongs to. A member who may chat for an organization is also in that
+ * organization's room, `org:{orgId}` (worktrees/ORG-CHAT-CONTRACT.md §3.4):
+ * members are never participants of its conversations, so that room is how
+ * a company inbox hears them.
  */
+
+/** An organization's room. Its members' sockets join it at SETUP when they may LIST its conversations. */
+export const orgRoomOf = (organizationId: unknown): string | null => {
+  const id = organizationId === null || organizationId === undefined ? "" : String(organizationId);
+  return /^[0-9a-fA-F]{24}$/.test(id) ? `org:${id.toLowerCase()}` : null;
+};
+
+const isOrgRoom = (room: unknown): room is string => typeof room === "string" && /^org:[0-9a-f]{24}$/.test(room);
 
 /**
  * The instance that holds the socket joins it to the rooms a SETUP message
@@ -19,7 +30,7 @@ import { dataOf, logEvent, type SocketAuthMode } from "./auth";
  */
 export const joinSetupRooms = (
   io: Server,
-  message: { userId: string; socketId: string; conversationId?: string }
+  message: { userId: string; socketId: string; conversationId?: string; orgRooms?: unknown }
 ): "joined" | "absent" | "refused" => {
   const socket = io.sockets.sockets.get(message.socketId);
   if (!socket) return "absent";
@@ -30,7 +41,49 @@ export const joinSetupRooms = (
   }
   socket.join(message.userId);
   if (message.conversationId) socket.join(message.conversationId);
+  // Only for a verified socket: the SETUP handler never names org rooms for
+  // a legacy one, and a message that did would not get them either.
+  if (verified && Array.isArray(message.orgRooms)) {
+    for (const room of message.orgRooms) if (isOrgRoom(room)) socket.join(room);
+  }
   return "joined";
+};
+
+/** What SEND_MESSAGE carries: the conversation after the write, and the stored message, both through JSON. */
+export interface NewMessageConversation {
+  _id: unknown;
+  participants?: { user?: unknown }[];
+  organizationId?: unknown;
+}
+
+/**
+ * NEW_MESSAGE to every participant's room (after 4 s for a file, video or
+ * voice message, which the client uploads after sending), NEW_MESSAGE_PAGE
+ * to the conversation's own room, and, for an organization's conversation,
+ * NEW_MESSAGE to its `org:{orgId}` room with the same delay.
+ */
+export const deliverNewMessage = (
+  io: Server,
+  conversation: NewMessageConversation,
+  messageData: { messageType?: unknown },
+  setTimer: (fn: () => void, ms: number) => unknown = setTimeout
+): void => {
+  const dataResponse = { type: "NEW_MESSAGE", response: { ...messageData } };
+  const dataResponseOrder = { type: "NEW_MESSAGE_PAGE", response: { ...messageData } };
+  const delay: number = ["FILE", "VIDEO", "VOICE"].includes(String(messageData.messageType ?? "")) ? 4000 : 0;
+
+  const rooms = (conversation.participants ?? [])
+    .map((participant) => (participant?.user === undefined || participant?.user === null ? "" : String(participant.user)))
+    .filter((room) => room.length > 0);
+  const orgRoom = orgRoomOf(conversation.organizationId);
+  if (orgRoom) rooms.push(orgRoom);
+  for (const room of rooms) {
+    setTimer(() => {
+      io.to(room).emit("CONVERSATION_LISTENING", dataResponse);
+    }, delay);
+  }
+  // If the conversation is of type ORDER, emit to the conversation room as well
+  io.to(String(conversation._id)).emit("CONVERSATION_LISTENING", dataResponseOrder);
 };
 
 /**
@@ -58,6 +111,8 @@ export interface ReadMessageNotice {
   readerId?: unknown;
   readAt?: unknown;
   readAllAt?: unknown;
+  /** A candidate's read of an organization conversation also goes to the company (ORG-CHAT-CONTRACT.md §3.4). */
+  orgRoom?: unknown;
 }
 
 /**
@@ -72,6 +127,7 @@ export const deliverReadMessage = (io: Server, notice: ReadMessageNotice): void 
   const rooms = Array.isArray(notice?.userIds)
     ? [...new Set(notice.userIds.filter((room): room is string => typeof room === "string" && room.length > 0))]
     : [];
+  if (isOrgRoom(notice?.orgRoom)) rooms.push(notice.orgRoom);
   // Never io.to([]): socket.io treats an empty room list as "everyone".
   if (rooms.length === 0) return;
   const payload: Record<string, unknown> = { type: "READ_MESSAGE", response: notice.conversationId };
@@ -122,15 +178,19 @@ export interface TypingNotice {
   conversationId?: unknown;
   userId?: unknown;
   typing?: unknown;
+  /** The candidate typing in an organization conversation: the company hears it too. */
+  orgRoom?: unknown;
 }
 
 /**
  * TYPING goes to the other participants' rooms only: the publisher already
  * left the typer out, and the typer's own room is dropped here again, so
- * their other devices never show their own dots.
+ * their other devices never show their own dots. A candidate's TYPING in an
+ * organization conversation also goes to its org room.
  */
 export const deliverTyping = (io: Server, notice: TypingNotice): void => {
   const rooms = userRooms(notice?.userIds).filter((room) => room !== notice.userId);
+  if (isOrgRoom(notice?.orgRoom)) rooms.push(notice.orgRoom);
   // Never io.to([]): socket.io treats an empty room list as "everyone".
   if (rooms.length === 0) return;
   io.to(rooms).emit("CONVERSATION_LISTENING", {

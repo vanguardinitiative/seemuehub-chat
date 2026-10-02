@@ -36,6 +36,15 @@ export interface ChatPushBody {
   messageId?: string;
   conversationType?: string;
   imageUrl?: string;
+  /**
+   * A company conversation (ORG-CHAT-CONTRACT.md §2.5): CANDIDATE titles the
+   * push with the organization, never the member who wrote; ORGANIZATION
+   * makes the backend notify the company's members (recipientIds is empty).
+   */
+  organizationId?: string;
+  audience?: "CANDIDATE" | "ORGANIZATION";
+  /** CANDIDATE: the organization's name as this conversation has it, for when the backend has none. */
+  senderName?: string;
 }
 
 /** The fields of a stored conversation and message this reads. */
@@ -43,6 +52,8 @@ export interface PushConversation {
   _id: unknown;
   conversationType?: unknown;
   participants?: { user?: unknown; isMuted?: boolean }[];
+  organizationId?: unknown;
+  organization?: { name?: unknown; nameLao?: unknown } | null;
 }
 export interface PushMessage {
   _id?: unknown;
@@ -51,6 +62,13 @@ export interface PushMessage {
   content?: unknown;
   attachments?: { fileUrl?: unknown }[];
   isOrderMessage?: boolean;
+  /** Set on a company message (src/services/org-chat.ts). */
+  sendAsOrganizationId?: unknown;
+}
+
+/** What the push bodies depend on beyond the message: whether company chat is on. */
+export interface ChatPushOptions {
+  orgChat?: boolean;
 }
 
 const idOf = (value: unknown): string | null => {
@@ -94,6 +112,9 @@ export const snippetOf = (content: unknown): string | undefined => {
   return chars.length <= CHAT_PUSH_LIMITS.snippet ? folded : `${chars.slice(0, CHAT_PUSH_LIMITS.snippet - 1).join("")}…`;
 };
 
+const nameOf = (value: unknown): string | undefined =>
+  typeof value === "string" && value.trim() !== "" ? value.trim().slice(0, 100) : undefined;
+
 /**
  * The request bodies for one stored message: one per 50 recipients, none when
  * there is nobody to tell. Pure.
@@ -101,8 +122,22 @@ export const snippetOf = (content: unknown): string | undefined => {
  * Recipients are the conversation's participants except the sender and anyone
  * who muted it. Order and system messages are never pushed from here: the
  * backend already notifies its own order events.
+ *
+ * A company conversation (it has an organizationId) is only pushed with
+ * company chat on (`options.orgChat`), and then by who wrote:
+ * - a company message (sendAsOrganizationId) goes to the candidate, unless
+ *   they muted it, with `audience: "CANDIDATE"`;
+ * - the candidate's message goes to the company, `audience: "ORGANIZATION"`
+ *   with no recipientIds: its members are not participants, so the backend
+ *   finds them.
+ * With it off, nothing, as before: the members were never participants and
+ * company messages were never pushed.
  */
-export const chatPushBodies = (conversation: PushConversation | null | undefined, message: PushMessage | null | undefined): ChatPushBody[] => {
+export const chatPushBodies = (
+  conversation: PushConversation | null | undefined,
+  message: PushMessage | null | undefined,
+  options: ChatPushOptions = {}
+): ChatPushBody[] => {
   if (!conversation || !message) return [];
   if (message.isOrderMessage) return [];
   if (!isClientMessageType(message.messageType)) return [];
@@ -111,20 +146,46 @@ export const chatPushBodies = (conversation: PushConversation | null | undefined
   const senderId = idOf(message.sender);
   if (!conversationId || !senderId) return [];
 
-  const recipients = [
-    ...new Set(
-      (conversation.participants ?? [])
-        .filter((participant) => participant && !participant.isMuted)
-        .map((participant) => idOf(participant.user))
-        .filter((id): id is string => id !== null && id !== senderId)
-    ),
-  ];
-  if (recipients.length === 0) return [];
+  const organizationId = idOf(conversation.organizationId);
+  if (organizationId && !options.orgChat) return [];
+  const toCompany = Boolean(organizationId && !idOf(message.sendAsOrganizationId));
+  const companyFields: Partial<ChatPushBody> = organizationId
+    ? toCompany
+      ? { organizationId, audience: "ORGANIZATION" }
+      : {
+          organizationId,
+          audience: "CANDIDATE",
+          ...(nameOf(conversation.organization?.nameLao) ?? nameOf(conversation.organization?.name)
+            ? { senderName: nameOf(conversation.organization?.nameLao) ?? nameOf(conversation.organization?.name) }
+            : {}),
+        }
+    : {};
+
+  const recipients = toCompany
+    ? []
+    : [
+        ...new Set(
+          (conversation.participants ?? [])
+            .filter((participant) => participant && !participant.isMuted)
+            .map((participant) => idOf(participant.user))
+            .filter((id): id is string => id !== null && id !== senderId)
+        ),
+      ];
+  if (!toCompany && recipients.length === 0) return [];
 
   const snippet = message.messageType === "TEXT" ? snippetOf(message.content) : undefined;
   const messageId = messageIdOf(message._id);
   const conversationType = typeof conversation.conversationType === "string" ? conversation.conversationType : undefined;
   const imageUrl = imageUrlOf(message);
+  const rich = {
+    ...(snippet ? { snippet } : {}),
+    ...(messageId ? { messageId } : {}),
+    ...(conversationType ? { conversationType } : {}),
+    ...(imageUrl ? { imageUrl } : {}),
+  };
+  if (toCompany) {
+    return [{ conversationId, senderId, recipientIds: [], messageType: message.messageType, ...rich, ...companyFields }];
+  }
   const bodies: ChatPushBody[] = [];
   for (let i = 0; i < recipients.length; i += CHAT_PUSH_LIMITS.recipients) {
     bodies.push({
@@ -132,10 +193,8 @@ export const chatPushBodies = (conversation: PushConversation | null | undefined
       senderId,
       recipientIds: recipients.slice(i, i + CHAT_PUSH_LIMITS.recipients),
       messageType: message.messageType,
-      ...(snippet ? { snippet } : {}),
-      ...(messageId ? { messageId } : {}),
-      ...(conversationType ? { conversationType } : {}),
-      ...(imageUrl ? { imageUrl } : {}),
+      ...rich,
+      ...companyFields,
     });
   }
   return bodies;
@@ -178,12 +237,16 @@ export const reactionPushBody = (push: ReactionPush | null | undefined): ChatPus
 
 export interface ChatPushDeps {
   /** Read per call: the configuration as it is now. */
-  config: () => { backendUrl?: string; internalKey?: string };
+  config: () => { backendUrl?: string; internalKey?: string; orgChat?: boolean };
   post: (url: string, body: unknown, options: { timeout: number; headers: Record<string, string> }) => Promise<unknown>;
 }
 
 const defaultDeps: ChatPushDeps = {
-  config: () => ({ backendUrl: env.BACKEND_URL, internalKey: env.CHAT_INTERNAL_KEY }),
+  config: () => ({
+    backendUrl: env.BACKEND_URL,
+    internalKey: env.CHAT_INTERNAL_KEY,
+    orgChat: env.ORG_CHAT_ENABLED === "true",
+  }),
   post: (url, body, options) => axios.post(url, body, options),
 };
 
@@ -195,7 +258,7 @@ export const pushChatMessage = async (
   conversation: PushConversation | null | undefined,
   message: PushMessage | null | undefined,
   deps: ChatPushDeps = defaultDeps
-): Promise<void> => postChatPushes(() => chatPushBodies(conversation, message), deps);
+): Promise<void> => postChatPushes((config) => chatPushBodies(conversation, message, { orgChat: config.orgChat === true }), deps);
 
 /**
  * Ask the backend to tell a message's author that someone reacted to it
@@ -209,12 +272,16 @@ export const pushReaction = async (push: ReactionPush, deps: ChatPushDeps = defa
   }, deps);
 
 /** Posts the bodies `build` returns; swallows and logs every failure, its own included. */
-const postChatPushes = async (build: () => ChatPushBody[], deps: ChatPushDeps): Promise<void> => {
+const postChatPushes = async (
+  build: (config: ReturnType<ChatPushDeps["config"]>) => ChatPushBody[],
+  deps: ChatPushDeps
+): Promise<void> => {
   try {
-    const { backendUrl, internalKey } = deps.config();
+    const config = deps.config();
+    const { backendUrl, internalKey } = config;
     if (!backendUrl || !internalKey) return;
 
-    const bodies = build();
+    const bodies = build(config);
     if (bodies.length === 0) return;
 
     const url = `${backendUrl.replace(/\/+$/, "")}${CHAT_PUSH_PATH}`;

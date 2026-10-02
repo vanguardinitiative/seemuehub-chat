@@ -148,19 +148,30 @@ test("REST sends: STICKER", async (t) => {
 
   const lookups = [];
   const created = [];
-  /** The conversation each request finds; its latestMessageData is what the handler wrote. */
+  /**
+   * The conversation each request finds; its latestMessageData is what the
+   * handler wrote. Both routes write it with an update, never .save()
+   * (CHAT-CONTRACT.md §1.1), which is applied here.
+   */
   let conversation;
+  const find = (filter) => {
+    lookups.push(filter);
+    conversation = { _id: (filter && filter._id) || filter, organizationId: new Types.ObjectId(organizationId) };
+    return query(conversation);
+  };
   const restores = [
-    stub(conversationModel, "findById", (id) => {
-      lookups.push(String(id));
-      conversation = { _id: id, organizationId, save: async () => {} };
+    stub(conversationModel, "findById", find),
+    stub(conversationModel, "findOne", find),
+    stub(conversationModel, "findOneAndUpdate", (filter, update) => {
+      Object.assign(conversation, update.$set);
       return query(conversation);
     }),
     stub(messageModel, "create", async (doc) => {
       created.push(doc);
       return { _id: new Types.ObjectId(), sendAt: new Date(), ...doc };
     }),
-    // Both routes look up an ACTIVE membership for an organization send.
+    // Both routes look up an ACTIVE membership for an organization send
+    // while ORG_CHAT_ENABLED is off, as they always did.
     stub(mongoose.models.OrganizationMember, "findOne", () => query({ status: "ACTIVE" })),
   ];
 

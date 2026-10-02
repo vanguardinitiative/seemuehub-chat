@@ -28,8 +28,9 @@ const TARGET_FIELDS = "_id conversation sender messageType content attachments i
 export const resolveReply = async (
   replyTo: unknown,
   conversationId: unknown,
-  session: mongoose.ClientSession,
-  context: { event: "NEW_MESSAGE" | "NEW_GROUP_MESSAGE"; socketId?: string; userId?: string }
+  // null outside a transaction: a company message (src/services/org-chat.ts).
+  session: mongoose.ClientSession | null,
+  context: { event: "NEW_MESSAGE" | "NEW_GROUP_MESSAGE" | "ORG_MESSAGE"; socketId?: string; userId?: string }
 ): Promise<ReplyFields> => {
   if (!asksForReply(replyTo)) return NO_REPLY;
 

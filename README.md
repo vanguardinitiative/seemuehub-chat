@@ -31,6 +31,7 @@ The tests need neither Mongo nor Redis.
 | `SOCKET_AUTH_MODE` | no (`permissive`) | `permissive` or `enforce`; see below. Any other value stops the service at boot |
 | `BACKEND_URL` | no | seemuehub-backend's origin (`https://api.seemuehub.com`, no `/api/v1`). With `CHAT_INTERNAL_KEY`, new private messages are pushed through it; see [Push notifications](#push-notifications). Not a URL: the service stops at boot |
 | `STICKER_URL_PREFIX` | no (`https://seemuehub-storage.s3.ap-southeast-1.amazonaws.com/images/`) | Where sticker images live; a `STICKER` message's attachment must start with it (see [Stickers](#stickers)). Only needs setting if the bucket moves. Not an https URL ending in `/`: the service stops at boot |
+| `ORG_CHAT_ENABLED` | no (`false`) | `true` turns on company ↔ candidate chat (see [Company conversations](#company-conversations)); needs `BACKEND_URL`, `CHAT_INTERNAL_KEY` and the backend's own `ORG_CHAT_ENABLED` |
 
 `.env.example` lists them all. In production these come from the `ENV`
 repository secret, which the deploy writes to `.env` for
@@ -301,6 +302,43 @@ deletes or hides it.
   `PENDING` 30 days after it was created `CANCELLED` and inactive. It only
   relabels the conversation (not the order in the backend), and the chat
   stays readable.
+
+## Company conversations
+
+A company chats with a candidate (`worktrees/ORG-CHAT-CONTRACT.md` §3,
+`src/services/org-chat.ts`). The conversation has one participant, the
+candidate, plus `organizationId`, `candidateUserId`, an `organization`
+snapshot (`name`, `nameLao`, `logo`, `slug`), `orgSide` (the company's read
+state), `basis`, `jobId`, `openedBy` and `candidateBlockedAt`. One per
+organization and candidate (a partial unique index). Members are never
+participants: they use the routes below, and every one of them asks the
+backend first (`POST {BACKEND_URL}/api/v1/internal/org-chat/authorize`,
+2 s timeout; LIST/READ/SEND answers cached 60 s in Redis
+`orgchat:auth:{orgId}:{userId}`, OPEN never). Backend unreachable: `503
+ORG_CHAT_UNAVAILABLE`.
+
+| Route (`/v1/api`) | Who |
+| --- | --- |
+| `POST /organizations/:id/conversations` `{ candidateUserId, basis, applicationId?, matchId?, firstMessage }` | a member who may OPEN on that basis: `201` new, `200` into the existing one |
+| `GET /organizations/:id/conversations?skip&limit` | LIST; each item has `unread` |
+| `GET /organizations/conversations/:id/messages?before&skip&limit` | READ |
+| `POST /organizations/conversations/:id/messages`, `POST /messages` with `sendAsOrganizationId` | SEND |
+| `PUT /organizations/conversations/:id/read` | READ |
+| `PUT /conversations/:id/mute` `{ muted }` | any participant |
+| `POST /conversations/:id/block` | the candidate |
+
+A company message carries `sendAsOrganizationId` and `actorUserId` (the
+member). Sockets: a member's SETUP joins `org:{orgId}` for each organization
+they may LIST; `NEW_MESSAGE`, the candidate's `READ_MESSAGE` and `TYPING`
+reach that room. Pushes go to the candidate as the company (`audience:
+"CANDIDATE"`, not when muted) and to the company for the candidate's replies
+(`audience: "ORGANIZATION"`). After a block nobody sends and the company
+cannot reopen. Errors are `{ success: false, errors: { code, message } }`
+(`ORG_CHAT_*`, 403; `ORG_CHAT_DAILY_LIMIT`, 429).
+
+With `ORG_CHAT_ENABLED` off, opening and the new routes answer `403
+ORG_CHAT_DISABLED`; the company list and send keep their old rule (an
+ACTIVE membership) with no fan-out or push.
 
 ## Internal routes and `CHAT_INTERNAL_KEY`
 

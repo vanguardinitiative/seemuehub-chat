@@ -54,6 +54,16 @@ const envSchema = z.object({
       .refine((value) => value.startsWith("https://") && value.endsWith("/"), "STICKER_URL_PREFIX must be an https URL ending in /")
       .default("https://seemuehub-storage.s3.ap-southeast-1.amazonaws.com/images/")
   ),
+
+  // Company ↔ candidate chat (worktrees/ORG-CHAT-CONTRACT.md, src/services/org-chat.ts).
+  // Off unless exactly "true": opening a company conversation answers 403
+  // ORG_CHAT_DISABLED, the new routes too, and the routes that existed
+  // before behave as they did. seemuehub-backend has a switch of the same
+  // name; both are turned on together.
+  ORG_CHAT_ENABLED: z.preprocess(
+    (value) => (typeof value === "string" && value.trim() !== "" ? value.trim().toLowerCase() : undefined),
+    z.enum(["true", "false"]).default("false")
+  ),
 });
 
 export const env = envSchema.parse(process.env);

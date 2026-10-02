@@ -11,8 +11,23 @@ import { messageStatusModel } from "@/models/messageStatus";
 import { participantOf, userIdOf } from "@/utils/conversation-access";
 import { DELIVERY_FIELDS, deliverConversation } from "@/services/delivered";
 import type { DeliveredConversation } from "@/utils/delivered";
-import { logEvent } from "@/socket/auth";
+import { logEvent, refuse } from "@/socket/auth";
 import { resolveReply } from "./reply";
+import { isBlocked } from "@/utils/org-chat";
+
+/**
+ * Thrown inside the send's transaction when the conversation is a company
+ * conversation whose candidate blocked the company (ORG-CHAT-CONTRACT.md
+ * §3.2): the transaction is aborted, so neither the message nor the
+ * conversation's latest message is kept, and the sender gets ERROR
+ * ORG_CHAT_BLOCKED.
+ */
+class BlockedConversationError extends Error {
+  constructor() {
+    super("ORG_CHAT_BLOCKED");
+    this.name = "BlockedConversationError";
+  }
+}
 
 interface MessageData {
   messageType: string;
@@ -133,6 +148,10 @@ const sendPrivateMessage = async (socket: Socket, io: Server, data: MessageData)
       },
       { new: true, session }
     );
+    // Checked on the conversation the update returned, inside the
+    // transaction, so a block that lands meanwhile is honoured too. Before
+    // anything is published.
+    if (isBlocked(conversationData)) throw new BlockedConversationError();
     // const messageStatusData = conversationData?.participants
     //   .map((participant: IParticipant) => {
     //     if (participant.user.toString() !== data.senderId) {
@@ -175,6 +194,11 @@ const sendPrivateMessage = async (socket: Socket, io: Server, data: MessageData)
     void pushChatMessage(conversationData, messageData);
   } catch (error) {
     await abortQuietly(session);
+    if (error instanceof BlockedConversationError) {
+      logEvent({ msg: "message_refused", event: "NEW_MESSAGE", code: "ORG_CHAT_BLOCKED", socketId: socket?.id, conversationId: data?.conversationId ?? null });
+      refuse(socket, "NEW_MESSAGE", "ORG_CHAT_BLOCKED", { conversationId: data?.conversationId ?? null, _id: data?._id ?? null });
+      return;
+    }
     try {
       if (await confirmResentMessage(socket, "NEW_MESSAGE", data, error)) return;
     } catch (lookupError) {

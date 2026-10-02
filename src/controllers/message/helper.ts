@@ -12,6 +12,10 @@ export const createOrGetConversation = async (
     .findOne({
       conversationType: "PRIVATE",
       $and: [{ "participants.user": senderId }, { "participants.user": receiverId }],
+      // Never a company conversation: it is PRIVATE too, and its only
+      // participant is the candidate, so a send "to themselves" would land
+      // in it (past a block). Only a conversationId reaches those.
+      organizationId: null,
     })
     .session(session);
 

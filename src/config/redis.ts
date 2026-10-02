@@ -8,6 +8,7 @@ import { env } from "./env";
 import { describeRedisConfig } from "./redis-log";
 import {
   deliverDelivered,
+  deliverNewMessage,
   deliverPayment,
   deliverReaction,
   deliverReadMessage,
@@ -145,31 +146,9 @@ const subscribeToClient = async (io: Server): Promise<void> => {
           return console.log("ConversationData or participants not defined");
         }
 
-        const dataResponse = {
-          type: "NEW_MESSAGE",
-          response: {
-            ...messageData,
-          },
-        };
-        const dataResponseOrder = {
-          type: "NEW_MESSAGE_PAGE",
-          response: {
-            ...messageData,
-          },
-        };
-
-        console.log("success", messageData.content);
-        const delay: number = ["FILE", "VIDEO", "VOICE"].includes(messageData.messageType || "") ? 4000 : 0;
-
-        await Promise.all(
-          conversation.participants.map(async (participant) => {
-            setTimeout(() => {
-              io.to(participant.user.toString()).emit("CONVERSATION_LISTENING", dataResponse);
-            }, delay);
-          })
-        );
-        // If the conversation is of type ORDER, emit to the conversation room as well
-        io.to(conversation._id.toString()).emit("CONVERSATION_LISTENING", dataResponseOrder);
+        // The participants' rooms, the conversation's page room, and an
+        // organization conversation's org:{orgId} room: see deliverNewMessage.
+        deliverNewMessage(io, conversation, messageData);
       } catch (error) {
         if (error instanceof Error) {
           console.error(`Error processing SEND_MESSAGE: ${error.message}`);
@@ -292,4 +271,43 @@ const safePub = {
   isConnected: () => isRedisConnected,
 };
 
-export { safePub as pub, sub, subscribeToClient, redisConfig };
+/** A cache read gives up after this long and counts as a miss. */
+const CACHE_TIMEOUT_MS = 300;
+
+const withinCacheTimeout = <T>(work: Promise<T>): Promise<T> => {
+  let timer: NodeJS.Timeout | undefined;
+  return Promise.race([
+    work,
+    new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("cache timed out")), CACHE_TIMEOUT_MS);
+    }),
+  ]).finally(() => clearTimeout(timer));
+};
+
+/**
+ * A small key-value cache on the publisher connection (a subscriber
+ * connection cannot run GET/SET). Never throws and never waits long on a
+ * Redis that is down or slow: a miss is answered instead, so a cache can only
+ * ever cost a lookup, never fail a request.
+ */
+const cache = {
+  get: async (key: string): Promise<string | null> => {
+    try {
+      if (!isRedisConnected || !pub.isOpen) return null;
+      return await withinCacheTimeout(pub.get(key));
+    } catch (error) {
+      console.warn(`Redis cache read failed for ${key.split(":").slice(0, 2).join(":")}`, error instanceof Error ? error.message : error);
+      return null;
+    }
+  },
+  set: async (key: string, value: string, ttlSeconds: number): Promise<void> => {
+    try {
+      if (!isRedisConnected || !pub.isOpen) return;
+      await withinCacheTimeout(pub.set(key, value, { expiration: { type: "EX", value: ttlSeconds } }));
+    } catch (error) {
+      console.warn(`Redis cache write failed for ${key.split(":").slice(0, 2).join(":")}`, error instanceof Error ? error.message : error);
+    }
+  },
+};
+
+export { safePub as pub, sub, subscribeToClient, redisConfig, cache };

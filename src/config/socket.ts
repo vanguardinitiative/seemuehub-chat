@@ -2,7 +2,8 @@ import { Server as SocketIOServer } from "socket.io";
 import { pub, subscribeToClient } from "./redis";
 import { env } from "./env";
 import { sendGroupMessage, sendPrivateMessage } from "@/controllers/message";
-import { conversationPartners, isParticipant, membersOf } from "@/utils/conversation-access";
+import { audienceOf, conversationPartners, isParticipant, membersOf } from "@/utils/conversation-access";
+import { orgRoomsFor } from "@/services/org-chat";
 import { findReactionTarget, writeReaction } from "@/services/reactions";
 import { pushReaction } from "@/services/chat-push";
 import { writeDelivered } from "@/services/delivered";
@@ -46,6 +47,10 @@ export const setupSocketService = (server: any) => {
     pushReaction,
     writeDelivered,
     stickerUrlPrefix: env.STICKER_URL_PREFIX,
+    // Company ↔ candidate chat (ORG-CHAT-CONTRACT.md §3.4): a member's org
+    // rooms at SETUP, and TYPING between the candidate and the company.
+    orgRoomsFor,
+    audienceOf,
   });
 
   return io;
