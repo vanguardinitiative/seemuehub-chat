@@ -161,6 +161,9 @@ const RESERVED_MESSAGE_FIELDS = [
   // (utils/reply.ts), and only REACT_MESSAGE writes reactions.
   "replyPreview",
   "reactions",
+  // A Seemue AI card: only POST /agent-messages (seemuehub-backend) writes
+  // one, on an AGENT message (AGENT-CONTRACT.md §8.1).
+  "agent",
 ] as const;
 
 const isObjectId = (value: unknown): value is string =>
@@ -316,7 +319,7 @@ const handleMessage = async (
     return;
   }
 
-  // SYSTEM and ORDER_* are the service's own messages (see
+  // SYSTEM, ORDER_* and AGENT are the service's own messages (see
   // utils/message-type.ts). Checked for legacy sockets too: the type is
   // stored as sent, whoever sends it.
   const messageType = (raw as Record<string, unknown>).messageType;
@@ -406,7 +409,7 @@ const reactionTimesOf = (socket: Socket): number[] => {
  *   flood never reaches Mongo);
  * - INVALID_PAYLOAD (`field` messageId or emoji): not an ObjectId, or an
  *   emoji that is not null nor one of the six; or (`field: "messageId"`) a
- *   deleted message, an order message, or a SYSTEM / ORDER_* one;
+ *   deleted message, an order message, or a SYSTEM / ORDER_* / AGENT one;
  * - NOT_PARTICIPANT: the caller is not in the message's conversation. A
  *   message id that does not exist gets the same answer, so a stranger
  *   learns nothing about which ids exist or are deleted.

@@ -1,4 +1,5 @@
 import { idString, isObjectIdString } from "./ids";
+import { isServerMessageType } from "./message-type";
 
 /**
  * Replies (worktrees/CHAT-CONTRACT.md §2), as pure functions over the stored
@@ -10,7 +11,8 @@ import { idString, isObjectIdString } from "./ids";
  * decide: a target in the same conversation that is neither deleted nor an
  * order message makes the message a reply, with a preview built here from the
  * stored target. Anything else drops the reply and the message is delivered
- * as a normal one.
+ * as a normal one. The service's own messages (SYSTEM, ORDER_*, AGENT) are
+ * never quoted, the same rule as reactions (AGENT-CONTRACT.md §8.1).
  */
 
 /** A TEXT target's text in the preview is at most this long (CHAT-CONTRACT.md §2.1). */
@@ -40,7 +42,7 @@ export interface ReplyPreview {
 }
 
 /** Why a reply was dropped; logged as `reply_dropped`, never sent to the client. */
-export type ReplyDropReason = "INVALID_ID" | "NOT_FOUND" | "OTHER_CONVERSATION" | "DELETED" | "ORDER_MESSAGE";
+export type ReplyDropReason = "INVALID_ID" | "NOT_FOUND" | "OTHER_CONVERSATION" | "DELETED" | "ORDER_MESSAGE" | "SERVER_MESSAGE";
 
 /** Whether the payload asked for a reply at all: `replyTo` present and not empty. */
 export const asksForReply = (replyTo: unknown): boolean =>
@@ -62,6 +64,7 @@ export const replyDropReason = (
   if (!targetConversation || targetConversation !== idString(conversationId)) return "OTHER_CONVERSATION";
   if (target.isDeleted === true) return "DELETED";
   if (target.isOrderMessage === true) return "ORDER_MESSAGE";
+  if (isServerMessageType(target.messageType)) return "SERVER_MESSAGE";
   return null;
 };
 

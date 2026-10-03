@@ -142,7 +142,7 @@ export interface CompanyMessageInput {
 
 /** A company message's stored fields, or why it is refused (a 400). */
 const companyContent = (input: CompanyMessageInput): { ok: true; fields: Record<string, unknown> } | { ok: false; code: "INVALID_MESSAGE_TYPE" | "INVALID_STICKER" | "VALIDATION_ERROR" } => {
-  // Stored as TEXT; a server-only type (SYSTEM, ORDER_*) is refused, not downgraded.
+  // Stored as TEXT; a server-only type (SYSTEM, ORDER_*, AGENT) is refused, not downgraded.
   if (input.messageType !== undefined && !isClientMessageType(input.messageType)) return { ok: false, code: "INVALID_MESSAGE_TYPE" };
   if (input.messageType === MessageType.STICKER) {
     const sticker = checkSticker(input.attachments, env.STICKER_URL_PREFIX);

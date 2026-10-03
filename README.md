@@ -3,7 +3,8 @@
 Chat and live-update service for Seemuehub. One Node process serves:
 
 - REST under `/v1/api` (conversations, messages, read status, and the internal
-  `/core-socket/payment` and `/orders` hooks the backend calls), and
+  `/core-socket/payment`, `/orders` and `/agent-messages` hooks the backend
+  calls), and
 - socket.io on the same port, fanned out across instances with Redis pub/sub.
 
 Pushing to `dev` deploys to production (`.github/workflows/deploy.yml`), so work
@@ -27,7 +28,7 @@ The tests need neither Mongo nor Redis.
 | `MONGODB_URI` | yes | Shared database with seemuehub-backend |
 | `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD` | yes | Pub/sub between instances |
 | `JWT_SECRET_KEY` | yes | The backend's `JWT_SECRET`; verifies access tokens for REST and sockets |
-| `CHAT_INTERNAL_KEY` | recommended | Shared with seemuehub-backend. When set, the backend-only routes (`POST /orders`, `POST /core-socket/payment`) require it as `X-Internal-Key`; see [Internal routes](#internal-routes-and-chat_internal_key) |
+| `CHAT_INTERNAL_KEY` | recommended | Shared with seemuehub-backend. When set, the backend-only routes (`POST /orders`, `POST /core-socket/payment`) require it as `X-Internal-Key`; `POST /agent-messages` requires it always and refuses everyone while it is unset. See [Internal routes](#internal-routes-and-chat_internal_key) |
 | `SOCKET_AUTH_MODE` | no (`permissive`) | `permissive` or `enforce`; see below. Any other value stops the service at boot |
 | `BACKEND_URL` | no | seemuehub-backend's origin (`https://api.seemuehub.com`, no `/api/v1`). With `CHAT_INTERNAL_KEY`, new private messages are pushed through it; see [Push notifications](#push-notifications). Not a URL: the service stops at boot |
 | `STICKER_URL_PREFIX` | no (`https://seemuehub-storage.s3.ap-southeast-1.amazonaws.com/images/`) | Where sticker images live; a `STICKER` message's attachment must start with it (see [Stickers](#stickers)). Only needs setting if the bucket moves. Not an https URL ending in `/`: the service stops at boot |
@@ -78,8 +79,9 @@ A socket that sends no token at all is a **legacy** socket (see
 
 `messageType` must be one a client may send: `TEXT`, `IMAGE`, `VIDEO`,
 `VOICE`, `FILE`, `REACTION`, `STICKER`, `LOCATION`, `VOICE_CALL`,
-`VIDEO_CALL`. `SYSTEM` and the `ORDER_*` types are the service's own (they
-render as order events) and are refused with `ERROR` `INVALID_PAYLOAD`,
+`VIDEO_CALL`. `SYSTEM`, the `ORDER_*` types (they render as order events) and
+`AGENT` (a [Seemue AI card](#seemue-ai-messages-agent)) are the service's own
+and are refused with `ERROR` `INVALID_PAYLOAD`,
 `field: "messageType"`, from verified and legacy sockets alike. The REST sends
 (`POST /messages`, `POST /organizations/conversations/:id/messages`) store
 `TEXT` (or a valid `STICKER`, below) and answer 400 to a server-only type.
@@ -87,8 +89,9 @@ render as order events) and are refused with `ERROR` `INVALID_PAYLOAD`,
 Fields a client cannot set on a message: `sender`, `actorUserId`,
 `sendAsOrganizationId`, `isOrderMessage`, `orderId`, `orderStatus`,
 `orderAction`, `isDeleted`, `deletedAt`, `deletedBy`, `deliveredAllAt`,
-`readAllAt`, `replyPreview`, `reactions`. They are dropped. `isReply` is
-always the service's own verdict on `replyTo`.
+`readAllAt`, `replyPreview`, `reactions`, `agent`. They are dropped (the
+REST sends never read them at all). `isReply` is always the service's own
+verdict on `replyTo`.
 
 ### Stickers
 
@@ -119,7 +122,8 @@ with `content: "STICKER"` as a sticker.
 A client makes a message a reply by adding `replyTo: "<messageId>"` to
 `NEW_MESSAGE` / `NEW_GROUP_MESSAGE` (`worktrees/CHAT-CONTRACT.md` §2). Once
 the send has resolved its conversation, the target must exist in that same
-conversation and be neither deleted nor an order message. Then the message
+conversation and be neither deleted, nor an order message, nor one of the
+service's own (`SYSTEM`, `ORDER_*`, `AGENT`). Then the message
 is stored with `isReply: true`, `replyTo`, and a `replyPreview` the service
 builds from the stored target (`src/utils/reply.ts`):
 
@@ -133,7 +137,7 @@ replyPreview: {
 ```
 
 Any other `replyTo` (not an id, missing, another conversation, deleted, an
-order message) is dropped and the message is delivered as a normal one, with
+order message, a `SYSTEM` / `ORDER_*` / `AGENT` message) is dropped and the message is delivered as a normal one, with
 a `{"msg":"reply_dropped","reason":...}` line. The preview is a copy: it stays
 as it was if the target is later deleted. The REST sends ignore `replyTo`.
 Old clients see a normal message.
@@ -152,7 +156,7 @@ messageId }`:
 | `code` | When |
 | --- | --- |
 | `RATE_LIMITED` | more than 10 `REACT_MESSAGE` in 10 s from this socket (counted first, refused ones included) |
-| `INVALID_PAYLOAD` | `field: "messageId"`: not an id, or a deleted, order, `SYSTEM` or `ORDER_*` message; `field: "emoji"`: not `null` nor one of the six |
+| `INVALID_PAYLOAD` | `field: "messageId"`: not an id, or a deleted, order, `SYSTEM`, `ORDER_*` or `AGENT` message; `field: "emoji"`: not `null` nor one of the six |
 | `NOT_PARTICIPANT` | the caller is not in the message's conversation, or the message does not exist (the same answer, so ids cannot be probed) |
 | `AUTH_REQUIRED` | a legacy (tokenless) socket, in either mode |
 
@@ -277,7 +281,7 @@ code), `setup_user_mismatch` (an authenticated SETUP named another userId),
 `field: "messageType"`, or with `field: "attachments"` and a `reason` of
 `ATTACHMENT_COUNT`, `FILE_URL` or `FILE_NAME` for a sticker), `reply_dropped`
 (a `replyTo` that was dropped, with a `reason` of `INVALID_ID`, `NOT_FOUND`,
-`OTHER_CONVERSATION`, `DELETED` or `ORDER_MESSAGE`), `reaction_refused` (a
+`OTHER_CONVERSATION`, `DELETED`, `ORDER_MESSAGE` or `SERVER_MESSAGE`), `reaction_refused` (a
 refused `REACT_MESSAGE`, with its `code` and `reason`),
 `delivered_write_failed` (a GET's delivered write failed; the GET still
 answered).
@@ -344,21 +348,90 @@ With `ORG_CHAT_ENABLED` off, opening and the new routes answer `403
 ORG_CHAT_DISABLED`; the company list and send keep their old rule (an
 ACTIVE membership) with no fan-out or push.
 
+## Seemue AI messages (AGENT)
+
+Someone in a conversation asks Seemue AI for something there (an agreement
+summary in an order chat, a delivery checklist, a note), and seemuehub-backend
+posts the result as an `AGENT` message (`worktrees/AGENT-CONTRACT.md` §8,
+`src/services/agent-messages.ts`). Only the backend can: `AGENT` is not a
+type clients may send, and `agent` is a field they cannot set.
+
+`POST /v1/api/agent-messages`, `X-Internal-Key` required (fail closed: while
+`CHAT_INTERNAL_KEY` is unset it refuses everyone):
+
+```js
+{
+  conversationId,            // ObjectId
+  requestedBy,               // ObjectId: who asked; becomes the sender
+  content,                   // Lao plain text, 1–2000 characters once trimmed
+  agent: {
+    v: 1,
+    kind: "AGREEMENT" | "CHECKLIST" | "NOTE",
+    card: { type, v, id, fallbackText, ... },   // an AGENT-CONTRACT §4 card, stored as sent
+    threadId?, actionId?,                       // ids, [A-Za-z0-9_-]{1,64}
+    requestedBy?,                               // if sent, must equal requestedBy
+  }
+}
+```
+
+The card is checked for its common fields only: `type` UPPER_SNAKE, `v` an
+integer ≥ 1, `id` a non-empty string, `fallbackText` 1–2000 characters; no
+`$…` or `__proto__` keys, at most 12 levels deep and 24,000 characters as
+JSON (a whole request stays under express.json's 100 kB).
+
+Who may ask: a participant of the conversation, or, in a company
+conversation, a member the backend lets `SEND` for that organization
+(`/internal/org-chat/authorize`, cached like the company routes; needs
+`ORG_CHAT_ENABLED`). A company conversation the candidate blocked takes
+nothing.
+
+It stores `{ messageType: "AGENT", sender: requestedBy, actorUserId:
+requestedBy, content, agent: { ...agent, requestedBy }, sendAsOrganizationId
+(a member, as the company) }`, points `latestMessageData` at it with one
+`updateOne` (timestamps on: it moves the chat up like any message; never
+`.save()`), and publishes `SEND_MESSAGE`, so sockets get `NEW_MESSAGE` like
+any message (participants' rooms, the page room, a company's `org:{orgId}`
+room). It is **never pushed**. Each one logs
+`{"msg":"agent_message_posted",...}`.
+
+| Status | Body |
+| --- | --- |
+| 201 | `{ success: true, data: { message } }`, the stored message, `agent` included |
+| 400 | `{ success: false, errors: { code: "VALIDATION_ERROR", message: "<field> is invalid" } }` |
+| 401 | `{ success: false, code: "CHAT-401", message: "Unauthorized", errors: { code: "UNAUTHORIZED", message } }` |
+| 403 | `errors.code` `NOT_PARTICIPANT`, `ORG_CHAT_BLOCKED`, `ORG_CHAT_DISABLED`, `ORG_CHAT_NOT_MEMBER`, `ORG_CHAT_FORBIDDEN` |
+| 404 | `errors.code` `CONVERSATION_NOT_FOUND` |
+| 503 | `errors.code` `ORG_CHAT_UNAVAILABLE` (the backend's authorize could not be asked) |
+
+Reading: every message list (`GET /messages`, `/messages/histories`, the
+company's and the admin's) returns it as stored, `agent` included, and
+`latestMessageData` has `messageType: "AGENT"` with `content`, so a list row
+shows the text. Nobody can reply to one (the reply is dropped,
+`reason: "SERVER_MESSAGE"`) or react to one (`INVALID_PAYLOAD`).
+
+Old clients need nothing: www and staging (`MessageBubble.svelte`) and the
+app (`message-bubble.tsx`) draw a type they do not know as `content` in a
+text bubble from the sender, and their list rows show `content`. New clients
+draw `agent.card` by its `type`, falling back to `card.fallbackText`.
+
 ## Internal routes and `CHAT_INTERNAL_KEY`
 
-Two routes are for seemuehub-backend only:
+Three routes are for seemuehub-backend only:
 
 | Route | Sent by the backend when | What it does here |
 | --- | --- | --- |
 | `POST /orders` | an order moves a step (`conversation.service` `updateOrderStep`) | stores a message in the order's conversation as the order's sender, and emits `ORDER` to its participants |
 | `POST /core-socket/payment` | IB Bank confirms a payment | emits `PAYMENT` to the payer |
+| `POST /agent-messages` | Seemue AI answers a request made in a chat | stores an [AGENT message](#seemue-ai-messages-agent) and delivers it |
 
-Both require the shared `CHAT_INTERNAL_KEY` as `X-Internal-Key`
+All three require the shared `CHAT_INTERNAL_KEY` as `X-Internal-Key`
 (`src/middleware/internal-key.ts`, compared timing-safe). A missing or wrong
 key is a 401 and logs `{"msg":"internal_key_refused",...}`. While the key is
-**not set here**, both stay open as they always were and every call logs
-`{"msg":"internal_key_unset",...}`: that is what lets this deploy before the
-backend sends the header.
+**not set here**, `/orders` and `/core-socket/payment` stay open as they
+always were and every call logs `{"msg":"internal_key_unset",...}`: that is
+what lets this deploy before the backend sends the header.
+`/agent-messages` is new, so it never was open: with no key it refuses every
+call (`internal_key_unset` with `"action":"refused"`).
 
 Rollout:
 
@@ -371,7 +444,8 @@ Rollout:
 4. Put the same value in **this service's** `ENV` secret and re-run the latest
    deploy. From now on both routes are closed to everyone but the backend.
 
-Rolling back is removing the key here (step 4).
+Rolling back is removing the key here (step 4). That also closes
+`/agent-messages` until the key is back.
 
 ## Read state
 
