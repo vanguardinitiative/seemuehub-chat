@@ -2,7 +2,9 @@ import type { Request, Response } from "express";
 import mongoose from "mongoose";
 
 import { messages } from "@/config";
+import { conversationModel } from "@/models/conversation";
 import { messageModel } from "@/models/message";
+import { organizationOf, organizationSnapshot } from "@/utils/org-chat";
 
 /**
  * Oversight transcript: any conversation's messages.
@@ -14,6 +16,12 @@ import { messageModel } from "@/models/message";
  *
  * Returned oldest-first so the transcript reads top to bottom, unlike the
  * member endpoint which pages backwards from the newest message.
+ *
+ * `organization` is the company of a company ↔ candidate conversation
+ * (ORG-CHAT-CONTRACT.md §4.3), as the conversation's snapshot has it, so the
+ * inspect page can label the messages that carry `sendAsOrganizationId` with
+ * the company, and `sender` (the member) in small text. Null for every other
+ * conversation.
  */
 const getMessagesAdmin = async (req: Request, res: Response): Promise<void> => {
   try {
@@ -31,7 +39,7 @@ const getMessagesAdmin = async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
-    const [items, total] = await Promise.all([
+    const [items, total, conversation] = await Promise.all([
       messageModel
         .find({ conversation: conversationId })
         .populate("sender", "userName displayName profileImage")
@@ -40,14 +48,17 @@ const getMessagesAdmin = async (req: Request, res: Response): Promise<void> => {
         .limit(limitNumber)
         .lean(),
       messageModel.countDocuments({ conversation: conversationId }),
+      conversationModel.findById(conversationId).select("organizationId organization").lean(),
     ]);
 
+    const organizationId = organizationOf(conversation);
     res.status(200).json({
       code: messages.SUCCESSFULLY.code,
       message: messages.SUCCESSFULLY.message,
       data: {
         messages: items,
         pagination: { skip: skipNumber, limit: limitNumber, total },
+        organization: organizationId ? { _id: organizationId, ...organizationSnapshot(conversation?.organization) } : null,
       },
     });
   } catch (error) {

@@ -1,50 +1,107 @@
 import { Router, type Request, type Response } from "express";
-import mongoose, { Schema } from "mongoose";
 import { checkAuthorizationMiddleware } from "@/middleware";
-import { conversationModel } from "@/models/conversation";
-import { messageModel, MessageType } from "@/models/message";
-import { messages } from "@/config";
-import { isClientMessageType } from "@/utils/message-type";
-import { checkSticker } from "@/utils/sticker";
-import { env } from "@/config/env";
+import { messages, withErrorCode } from "@/config";
+import { isObjectIdString } from "@/utils/ids";
+import {
+  OrgChatRefusal,
+  getConversation,
+  listConversations,
+  listMessages,
+  openConversation,
+  readAsOrganization,
+  sendAsOrganization,
+} from "@/services/org-chat";
 
+/**
+ * A company's side of its conversations with candidates
+ * (worktrees/ORG-CHAT-CONTRACT.md §3.2; the rules are src/services/org-chat.ts).
+ * Answers `{ success, data }`, or `{ success: false, errors: { code, message } }`
+ * as these routes always did: `errors.code` is always the specific code.
+ */
 const router = Router();
-const memberSchema = new Schema({ organizationId: Schema.Types.ObjectId, userId: Schema.Types.ObjectId, role: String, status: String }, { collection: "organizationmembers" });
-const Member = mongoose.models.OrganizationMember ?? mongoose.model("OrganizationMember", memberSchema);
 const uid = (req: Request) => String((req as any).user?.userId ?? (req as any).user?.id);
-const requireMember = async (organizationId: string, userId: string) => Member.findOne({ organizationId, userId, status: "ACTIVE" }).lean();
+
+const fail = (res: Response, status: number, code: string, message?: string) =>
+  void res.status(status).json({ success: false, errors: { code, ...(message ? { message } : {}) } });
+
+/** A refusal as its status and code; anything else is the 500 these routes always gave. */
+const handle = (res: Response, error: unknown, what: string) => {
+  if (error instanceof OrgChatRefusal) {
+    // The message-type and sticker refusals keep the CHAT-400 fields these
+    // routes always had, with the envelope's own two beside them.
+    if (error.code === "INVALID_MESSAGE_TYPE" || error.code === "INVALID_STICKER") {
+      return void res.status(400).json({ success: false, ...withErrorCode(messages[error.code], error.code) });
+    }
+    return fail(res, error.status, error.code, error.message);
+  }
+  console.error(`${what} failed`, error instanceof Error ? error.message : error);
+  fail(res, 500, "INTERNAL_EXCEPTION", "Something went wrong");
+};
 
 router.use(checkAuthorizationMiddleware);
+
+/** The company inbox: newest first, each conversation with `unread` for the company. */
 router.get("/:id/conversations", async (req: Request, res: Response) => {
   try {
-    if (!(await requireMember(String(req.params.id), uid(req)))) return void res.status(403).json({ success: false, errors: { code: "ORGANIZATION_MEMBERSHIP_REQUIRED", message: "Active organization membership is required" } });
-    const skip = Math.max(0, Number(req.query.skip ?? 0)), limit = Math.min(100, Math.max(1, Number(req.query.limit ?? 50)));
-    const conversations = await conversationModel.find({ organizationId: req.params.id }).populate("participants.user", "fullName userName displayName email profileImage").sort({ updatedAt: -1 }).skip(skip).limit(limit).lean();
-    res.json({ success: true, data: { conversations } });
-  } catch (error) { res.status(500).json({ success: false, errors: { code: "INTERNAL_EXCEPTION", message: "Something went wrong" } }); }
+    if (!isObjectIdString(req.params.id)) return fail(res, 400, "VALIDATION_ERROR", "Invalid organization id");
+    const skip = Math.max(0, Number(req.query.skip ?? 0) || 0);
+    const limit = Math.min(100, Math.max(1, Number(req.query.limit ?? 50) || 50));
+    res.json({ success: true, data: await listConversations(String(req.params.id), uid(req), skip, limit) });
+  } catch (error) {
+    handle(res, error, "organization conversation list");
+  }
 });
+
+/**
+ * Open a conversation with a candidate, with the company's first message:
+ * 201 when it is new, 200 when it was already there (the message goes into
+ * it). Body: { candidateUserId, basis, applicationId?, matchId?, firstMessage }.
+ */
 router.post("/:id/conversations", async (req: Request, res: Response) => {
   try {
-    const actor = uid(req); if (!(await requireMember(String(req.params.id), actor))) return void res.status(403).json({ success: false, errors: { code: "ORGANIZATION_MEMBERSHIP_REQUIRED" } });
-    const { participantUserId, applicationId } = req.body; if (!mongoose.isValidObjectId(participantUserId)) return void res.status(400).json({ success: false, errors: { code: "VALIDATION_ERROR", message: "participantUserId is required" } });
-    let item = await conversationModel.findOne({ organizationId: req.params.id, applicationId: applicationId || null, "participants.user": participantUserId });
-    if (!item) item = await conversationModel.create({ organizationId: req.params.id, applicationId, conversationType: "PRIVATE", conversationName: "ORGANIZATION_CONVERSATION", participants: [{ user: participantUserId, userType: "USER" }], latestMessageData: { isDeleted: false } });
-    res.status(201).json({ success: true, data: item });
-  } catch (error) { res.status(500).json({ success: false, errors: { code: "INTERNAL_EXCEPTION", message: "Something went wrong" } }); }
+    if (!isObjectIdString(req.params.id)) return fail(res, 400, "VALIDATION_ERROR", "Invalid organization id");
+    const { status, conversation, message } = await openConversation(String(req.params.id), uid(req), req.body);
+    res.status(status).json({ success: true, data: { conversation, message } });
+  } catch (error) {
+    handle(res, error, "organization conversation open");
+  }
 });
+
+/** One company conversation, in the shape of an inbox item. */
+router.get("/conversations/:conversationId", async (req: Request, res: Response) => {
+  try {
+    res.json({ success: true, data: await getConversation(String(req.params.conversationId), uid(req)) });
+  } catch (error) {
+    handle(res, error, "organization conversation read");
+  }
+});
+
+/** The company's view of a conversation's messages, newest first (?before, ?skip, ?limit). */
+router.get("/conversations/:conversationId/messages", async (req: Request, res: Response) => {
+  try {
+    res.json({ success: true, data: await listMessages(String(req.params.conversationId), uid(req), req.query as Record<string, unknown>) });
+  } catch (error) {
+    handle(res, error, "organization message list");
+  }
+});
+
+/** A member answers for the company. */
 router.post("/conversations/:conversationId/messages", async (req: Request, res: Response) => {
   try {
-    // Stored as TEXT; a server-only type (SYSTEM, ORDER_*) is refused, not downgraded.
-    if (req.body?.messageType !== undefined && !isClientMessageType(req.body.messageType)) return void res.status(400).json(messages.INVALID_MESSAGE_TYPE);
-    // A STICKER is the exception: stored as one when it passes utils/sticker.ts, refused before anything is read when it does not.
-    const sticker = req.body.messageType === MessageType.STICKER ? checkSticker(req.body.attachments, env.STICKER_URL_PREFIX) : null;
-    if (sticker && !sticker.ok) return void res.status(400).json(messages.INVALID_STICKER);
-    const actor = uid(req), conversation: any = await conversationModel.findById(req.params.conversationId); if (!conversation) return void res.status(404).json({ success: false, errors: { code: "CONVERSATION_NOT_FOUND" } });
-    if (!conversation.organizationId || !(await requireMember(String(conversation.organizationId), actor))) return void res.status(403).json({ success: false, errors: { code: "ORGANIZATION_MEMBERSHIP_REQUIRED" } });
-    const stored = sticker?.ok ? { content: sticker.content, messageType: MessageType.STICKER, attachments: sticker.attachments, fileUploaded: true } : { content: req.body.body ?? req.body.content, messageType: "TEXT" };
-    const item = await messageModel.create({ sender: actor, actorUserId: actor, sendAsOrganizationId: conversation.organizationId, conversation: conversation._id, ...stored });
-    conversation.latestMessageData = { senderId: actor, messageId: String(item._id), messageType: item.messageType, content: item.content, sendAt: item.sendAt, isDeleted: false }; await conversation.save();
-    res.status(201).json({ success: true, data: item });
-  } catch (error) { res.status(500).json({ success: false, errors: { code: "INTERNAL_EXCEPTION", message: "Something went wrong" } }); }
+    const message = await sendAsOrganization(String(req.params.conversationId), uid(req), req.body ?? {});
+    res.status(201).json({ success: true, data: message });
+  } catch (error) {
+    handle(res, error, "organization message send");
+  }
 });
+
+/** The company has read the conversation up to now. */
+router.put("/conversations/:conversationId/read", async (req: Request, res: Response) => {
+  try {
+    res.json({ success: true, data: await readAsOrganization(String(req.params.conversationId), uid(req)) });
+  } catch (error) {
+    handle(res, error, "organization read");
+  }
+});
+
 export default router;

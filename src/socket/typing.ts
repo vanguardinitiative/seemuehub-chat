@@ -20,8 +20,16 @@ export const TYPING_RULES = {
 export interface TypingEntry {
   /** Whether the caller is a participant, as of `checkedAt`. */
   member: boolean;
+  /**
+   * Whether the caller types for the company in a company conversation: not
+   * a participant, but in its `org:{orgId}` room (ORG-CHAT-CONTRACT.md
+   * §3.4). TYPING only; DELIVERED stays the participants'.
+   */
+  orgSide?: boolean;
   /** The other participants: who hears this socket's TYPING. */
   others: string[];
+  /** A company conversation's org room, when the caller is its candidate: the company hears them type too. */
+  orgRoom?: string | null;
   /** When membership was last looked up; null before the first lookup. */
   checkedAt: number | null;
   /**
@@ -45,7 +53,7 @@ export const newTypingEntry = (): TypingEntry => ({
 /** Whether the cached membership answer has run out (or there is none). */
 export const membershipExpired = (entry: TypingEntry, now: number): boolean => {
   if (entry.checkedAt === null) return true;
-  const ttl = entry.member ? TYPING_RULES.memberTtlMs : TYPING_RULES.nonMemberTtlMs;
+  const ttl = entry.member || entry.orgSide ? TYPING_RULES.memberTtlMs : TYPING_RULES.nonMemberTtlMs;
   return now - entry.checkedAt >= ttl;
 };
 
@@ -75,9 +83,15 @@ export const makeRoomForTyping = (entries: Map<string, TypingEntry>): void => {
 };
 
 /** The conversations a socket last reported `typing: true` in, with who to tell it stopped. */
-export const stillTyping = (entries: Map<string, TypingEntry> | undefined): { conversationId: string; others: string[] }[] =>
+export const stillTyping = (
+  entries: Map<string, TypingEntry> | undefined
+): { conversationId: string; others: string[]; orgRoom?: string }[] =>
   entries
     ? [...entries]
-        .filter(([, entry]) => entry.typing && entry.member && entry.others.length > 0)
-        .map(([conversationId, entry]) => ({ conversationId, others: [...entry.others] }))
+        .filter(([, entry]) => entry.typing && (entry.member || entry.orgSide) && (entry.others.length > 0 || Boolean(entry.orgRoom)))
+        .map(([conversationId, entry]) => ({
+          conversationId,
+          others: [...entry.others],
+          ...(entry.orgRoom ? { orgRoom: entry.orgRoom } : {}),
+        }))
     : [];

@@ -22,6 +22,8 @@ process.env.JWT_SECRET_KEY = process.env.JWT_SECRET_KEY || "test-secret";
 mongoose.set("bufferCommands", false);
 
 const published = [];
+/** The key-value cache config/redis exports (org chat's authorize answers, memberships), with what was set. */
+const cached = new Map();
 const redisFile = require.resolve("../../dist/config/redis.js");
 require.cache[redisFile] = {
   id: redisFile,
@@ -37,6 +39,12 @@ require.cache[redisFile] = {
     sub: {},
     subscribeToClient: async () => {},
     redisConfig: {},
+    cache: {
+      get: async (key) => (cached.has(key) ? cached.get(key).value : null),
+      set: async (key, value, ttlSeconds) => {
+        cached.set(key, { value, ttlSeconds });
+      },
+    },
   },
 };
 
@@ -66,4 +74,4 @@ const query = (result) => {
   return chain;
 };
 
-module.exports = { published, stub, query };
+module.exports = { published, cached, stub, query };

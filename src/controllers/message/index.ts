@@ -11,15 +11,37 @@ import { messageStatusModel } from "@/models/messageStatus";
 import { participantOf, userIdOf } from "@/utils/conversation-access";
 import { DELIVERY_FIELDS, deliverConversation } from "@/services/delivered";
 import type { DeliveredConversation } from "@/utils/delivered";
-import { logEvent } from "@/socket/auth";
+import { logEvent, refuse } from "@/socket/auth";
 import { resolveReply } from "./reply";
+import { isBlocked } from "@/utils/org-chat";
+
+/**
+ * Thrown inside the send's transaction when the conversation is a company
+ * conversation whose candidate blocked the company (ORG-CHAT-CONTRACT.md
+ * §3.2): the transaction is aborted, so neither the message nor the
+ * conversation's latest message is kept, and the sender gets ERROR
+ * ORG_CHAT_BLOCKED.
+ */
+class BlockedConversationError extends Error {
+  constructor() {
+    super("ORG_CHAT_BLOCKED");
+    this.name = "BlockedConversationError";
+  }
+}
 
 interface MessageData {
   messageType: string;
   content: string;
   conversationId?: string;
   senderId: string;
-  receiverId: string;
+  /**
+   * Only for a message without a conversationId: the other person of the
+   * private conversation to find or create. With a conversationId it is not
+   * read - the conversation says who hears it - so a company conversation,
+   * which has no other participant, needs none. Clients still send one there
+   * (the organization's id, or the candidate's own id); it is ignored.
+   */
+  receiverId?: string;
   _id?: string;
   /** The message this one answers (CHAT-CONTRACT.md §2.2); checked by resolveReply. */
   replyTo?: unknown;
@@ -80,12 +102,12 @@ const sendPrivateMessage = async (socket: Socket, io: Server, data: MessageData)
       throw new Error("Invalid _id format");
     }
 
-    if (!data.messageType || !data.content || !data.senderId || !data.receiverId) {
-      throw new Error("messageType, content, senderId, and receiverId are required");
+    if (!data.messageType || !data.content || !data.senderId || (!data.conversationId && !data.receiverId)) {
+      throw new Error("messageType, content, senderId, and a conversationId or receiverId are required");
     }
 
     const conversation = !data.conversationId
-      ? await createOrGetConversation(data.senderId, data.receiverId, session)
+      ? await createOrGetConversation(data.senderId, data.receiverId as string, session)
       : null;
 
     const newConversationId = conversation?._id || data.conversationId;
@@ -133,6 +155,10 @@ const sendPrivateMessage = async (socket: Socket, io: Server, data: MessageData)
       },
       { new: true, session }
     );
+    // Checked on the conversation the update returned, inside the
+    // transaction, so a block that lands meanwhile is honoured too. Before
+    // anything is published.
+    if (isBlocked(conversationData)) throw new BlockedConversationError();
     // const messageStatusData = conversationData?.participants
     //   .map((participant: IParticipant) => {
     //     if (participant.user.toString() !== data.senderId) {
@@ -175,6 +201,11 @@ const sendPrivateMessage = async (socket: Socket, io: Server, data: MessageData)
     void pushChatMessage(conversationData, messageData);
   } catch (error) {
     await abortQuietly(session);
+    if (error instanceof BlockedConversationError) {
+      logEvent({ msg: "message_refused", event: "NEW_MESSAGE", code: "ORG_CHAT_BLOCKED", socketId: socket?.id, conversationId: data?.conversationId ?? null });
+      refuse(socket, "NEW_MESSAGE", "ORG_CHAT_BLOCKED", { conversationId: data?.conversationId ?? null, _id: data?._id ?? null });
+      return;
+    }
     try {
       if (await confirmResentMessage(socket, "NEW_MESSAGE", data, error)) return;
     } catch (lookupError) {

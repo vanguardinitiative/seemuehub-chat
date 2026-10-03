@@ -44,7 +44,8 @@ export interface MessagePayload {
   content: string;
   conversationId?: string;
   senderId: string;
-  receiverId: string;
+  /** Only read without a conversationId (controllers/message sendPrivateMessage). */
+  receiverId?: string;
   [field: string]: unknown;
 }
 
@@ -54,6 +55,22 @@ export interface SetupMessage {
   socketId: string;
   conversationId?: string;
   partners: string[];
+  /** The `org:{orgId}` rooms of the organizations whose chats this member may LIST (verified sockets only). */
+  orgRooms?: string[];
+}
+
+/**
+ * Who hears a socket's TYPING in a conversation (utils/conversation-access.ts
+ * audienceOf): a participant hears as before, plus the company's room when
+ * the conversation is a company's; a member typing for the company (in its
+ * org room, not a participant) is heard by the participants.
+ */
+export interface ConversationAudience {
+  participant: boolean;
+  /** The participants other than the caller. */
+  others: string[];
+  /** A company conversation's org room, for a participant (the candidate) typing. */
+  orgRoom: string | null;
 }
 
 /** What REACT_MESSAGE publishes on Redis `REACTION` (see socket/rooms.ts deliverReaction). */
@@ -71,6 +88,8 @@ export interface TypingMessage {
   conversationId: string;
   userId: string;
   typing: boolean;
+  /** The candidate typing in a company conversation: its org room. */
+  orgRoom?: string;
 }
 
 export interface SocketDeps {
@@ -101,6 +120,16 @@ export interface SocketDeps {
   writeDelivered: (conversationId: string, userId: string, at: Date) => Promise<DeliveredConversation | null>;
   /** STICKER_URL_PREFIX: where a STICKER's image must live (utils/sticker.ts). */
   stickerUrlPrefix: string;
+  /**
+   * The org rooms a verified user's socket joins at SETUP (services/org-chat.ts
+   * orgRoomsFor). Absent, or empty with ORG_CHAT_ENABLED off: none.
+   */
+  orgRoomsFor?: (userId: string) => Promise<string[]>;
+  /**
+   * TYPING's audience, company conversations included (utils/conversation-access.ts).
+   * Absent: membersOf, participants only, as before company chat.
+   */
+  audienceOf?: (conversationId: string, userId: string, orgRooms: readonly string[]) => Promise<ConversationAudience | null>;
   /** The clock for the throttles; Date.now unless a test passes one. */
   now?: () => number;
   /** Timers for DELIVERED's deferred write; setTimeout / clearTimeout unless a test passes its own. */
@@ -248,12 +277,26 @@ const handleSetup = async (socket: Socket, deps: SocketDeps, raw: unknown): Prom
     console.error("conversation partners lookup failed", { userId, error: error instanceof Error ? error.message : error });
   }
 
+  // A member of a company hears its conversations in its org room
+  // (ORG-CHAT-CONTRACT.md §3.4). Verified sockets only: a legacy socket's
+  // userId is whatever it claims.
+  let orgRooms: string[] = [];
+  if (actor.kind === "verified" && deps.orgRoomsFor) {
+    try {
+      orgRooms = await deps.orgRoomsFor(userId);
+    } catch (error) {
+      console.error("org rooms lookup failed", { userId, error: error instanceof Error ? error.message : error });
+    }
+  }
+
   const socketData = dataOf(socket);
   socketData.roomUserId = userId;
   socketData.partners = partners;
+  socketData.orgRooms = orgRooms;
 
   const message: SetupMessage = { userId, socketId: socket.id, partners };
   if (conversationId) message.conversationId = conversationId;
+  if (orgRooms.length > 0) message.orgRooms = orgRooms;
   await deps.publish("SETUP", JSON.stringify(message));
 };
 
@@ -478,12 +521,20 @@ const memberEntry = async (
 
   if (!entry.pending && membershipExpired(entry, now())) {
     const checking = entry;
-    checking.pending = deps
-      .membersOf(conversationId, userId)
+    const lookup: Promise<ConversationAudience | null> = deps.audienceOf
+      ? deps.audienceOf(conversationId, userId, dataOf(socket).orgRooms ?? [])
+      : deps.membersOf(conversationId, userId).then((members) =>
+          members === null
+            ? null
+            : { participant: true, others: members.map((member) => member.userId).filter((id) => id !== userId), orgRoom: null }
+        );
+    checking.pending = lookup
       .then(
-        (members) => {
-          checking.member = members !== null;
-          checking.others = (members ?? []).map((member) => member.userId).filter((id) => id !== userId);
+        (audience) => {
+          checking.member = audience?.participant === true;
+          checking.orgSide = audience !== null && audience !== undefined && !audience.participant;
+          checking.others = (audience?.others ?? []).filter((id) => id !== userId);
+          checking.orgRoom = audience?.participant ? audience.orgRoom : null;
           checking.checkedAt = now();
           return true;
         },
@@ -536,7 +587,8 @@ const handleTyping = async (socket: Socket, deps: SocketDeps, raw: unknown): Pro
   const now = deps.now ?? Date.now;
   const entry = await memberEntry(socket, deps, event, conversationId, actor.userId);
   if (!entry) return;
-  if (!entry.member) {
+  // A participant, or a member typing for the company in its conversation.
+  if (!entry.member && !entry.orgSide) {
     refuse(socket, event, "NOT_PARTICIPANT", { conversationId });
     return;
   }
@@ -548,9 +600,10 @@ const handleTyping = async (socket: Socket, deps: SocketDeps, raw: unknown): Pro
   if (!typingPasses(entry, typing, at)) return;
   entry.lastForwardedAt = at;
   entry.typing = typing;
-  if (entry.others.length === 0) return;
+  if (entry.others.length === 0 && !entry.orgRoom) return;
 
   const message: TypingMessage = { userIds: [...entry.others], conversationId, userId: actor.userId, typing };
+  if (entry.orgRoom) message.orgRoom = entry.orgRoom;
   await deps.publish("TYPING", JSON.stringify(message));
 };
 
@@ -564,8 +617,9 @@ const stopTyping = (socket: Socket, deps: SocketDeps): void => {
   const typing = stillTyping(data.typing);
   data.typing?.clear();
   if (!userId) return;
-  for (const { conversationId, others } of typing) {
+  for (const { conversationId, others, orgRoom } of typing) {
     const message: TypingMessage = { userIds: others, conversationId, userId, typing: false };
+    if (orgRoom) message.orgRoom = orgRoom;
     try {
       void Promise.resolve(deps.publish("TYPING", JSON.stringify(message))).catch(() => {});
     } catch (error) {

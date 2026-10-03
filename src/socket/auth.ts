@@ -33,6 +33,8 @@ export interface SocketData {
   roomUserId?: string;
   /** Users who share a conversation with roomUserId: who hears this socket's online/offline. */
   partners?: string[];
+  /** The `org:{orgId}` rooms SETUP joined (ORG-CHAT-CONTRACT.md §3.4): where this member may type for a company. */
+  orgRooms?: string[];
   /** When this socket's recent REACT_MESSAGEs were accepted, for the rate limit. */
   reactionTimes?: number[];
   /**
@@ -52,7 +54,8 @@ export type SocketErrorCode =
   | "NOT_PARTICIPANT"
   | "INVALID_PAYLOAD"
   | "MESSAGE_SEND_FAILED"
-  | "RATE_LIMITED";
+  | "RATE_LIMITED"
+  | "ORG_CHAT_BLOCKED";
 
 const ERROR_MESSAGES: Record<SocketErrorCode, string> = {
   AUTH_REQUIRED: "Connect with auth: { token } to use this event",
@@ -61,6 +64,7 @@ const ERROR_MESSAGES: Record<SocketErrorCode, string> = {
   INVALID_PAYLOAD: "Invalid payload",
   MESSAGE_SEND_FAILED: "Failed to send message",
   RATE_LIMITED: "Too many events; try again shortly",
+  ORG_CHAT_BLOCKED: "This company conversation is blocked; nobody can send in it",
 };
 
 /** Every refusal goes out as one `ERROR` event of this shape. */

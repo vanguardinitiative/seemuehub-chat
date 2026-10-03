@@ -102,6 +102,33 @@ export interface IConversation extends Document {
   orderSender?: string;
   organizationId?: mongoose.Types.ObjectId;
   applicationId?: mongoose.Types.ObjectId;
+  // Company ↔ candidate conversations (worktrees/ORG-CHAT-CONTRACT.md §3.1).
+  // All absent on every other conversation. The organization's members are
+  // never participants: `participants` holds the candidate alone.
+  /** The one USER participant. Absent on organization conversations opened before this field. */
+  candidateUserId?: mongoose.Types.ObjectId;
+  /** The organization as it was at the open, refreshed on every company message. */
+  organization?: IOrganizationSnapshot;
+  /** The company side's read state; members are not participants, so it cannot live in participants[]. */
+  orgSide?: { lastReadAt?: Date; lastReadBy?: mongoose.Types.ObjectId; lastDeliveredAt?: Date };
+  /** Why the company could open it, as the backend proved. */
+  basis?: OrgChatBasis;
+  /** The job the basis points at, when there is one. */
+  jobId?: mongoose.Types.ObjectId;
+  /** The member who opened it. */
+  openedBy?: mongoose.Types.ObjectId;
+  /** When the candidate blocked the company. Permanent. */
+  candidateBlockedAt?: Date;
+}
+
+export const ORG_CHAT_BASES = ["UNLOCK", "APPLICATION", "MUTUAL_MATCH"] as const;
+export type OrgChatBasis = (typeof ORG_CHAT_BASES)[number];
+
+export interface IOrganizationSnapshot {
+  name?: string;
+  nameLao?: string;
+  logo?: string;
+  slug?: string;
 }
 
 const conversationSchema = new Schema<IConversation>(
@@ -185,6 +212,24 @@ const conversationSchema = new Schema<IConversation>(
     orderSender: String,
     organizationId: { type: Schema.Types.ObjectId, ref: "Organization", index: true },
     applicationId: { type: Schema.Types.ObjectId, ref: "OrganizationApplication", index: true },
+    // Company ↔ candidate (see IConversation). No defaults, so every other
+    // conversation is stored exactly as before; no indexes but the pair below.
+    candidateUserId: { type: Schema.Types.ObjectId, ref: "User" },
+    organization: {
+      type: new Schema({ name: String, nameLao: String, logo: String, slug: String }, { _id: false }),
+      default: undefined,
+    },
+    orgSide: {
+      type: new Schema(
+        { lastReadAt: Date, lastReadBy: { type: Schema.Types.ObjectId, ref: "User" }, lastDeliveredAt: Date },
+        { _id: false }
+      ),
+      default: undefined,
+    },
+    basis: { type: String, enum: ORG_CHAT_BASES },
+    jobId: { type: Schema.Types.ObjectId, ref: "Job" },
+    openedBy: { type: Schema.Types.ObjectId, ref: "User" },
+    candidateBlockedAt: Date,
   },
   { timestamps: true }
 );
@@ -201,6 +246,15 @@ conversationSchema.index({ orderStatus: 1, isOrderActive: 1 });
 conversationSchema.index({ orderPriority: 1, orderDeadline: 1 });
 conversationSchema.index({ "participants.user": 1, orderId: 1 });
 conversationSchema.index({ organizationId: 1, updatedAt: -1 });
+// One conversation per organization and candidate (ORG-CHAT-CONTRACT.md §3.1).
+// Partial, so only conversations that have a candidateUserId take part: the
+// ones opened before it existed, keyed by applicationId, may still repeat a
+// pair. Built by this service at start (autoIndex), and listed in
+// seemuehub-backend's chat-owned-indexes.ts so its index sync never drops it.
+conversationSchema.index(
+  { organizationId: 1, candidateUserId: 1 },
+  { unique: true, partialFilterExpression: { candidateUserId: { $exists: true } } }
+);
 
 export { ConversationType };
 export const conversationModel = mongoose.model<IConversation>("Conversation", conversationSchema);

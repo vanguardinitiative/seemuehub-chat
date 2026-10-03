@@ -250,10 +250,16 @@ test("REST message sends refuse the service's own message types", async (t) => {
   const { port } = server.address();
   const token = tokenFor(oid());
   const lookups = [];
-  const restore = stub(conversationModel, "findById", (id) => {
-    lookups.push(id);
-    return query(null);
-  });
+  // POST /messages finds the conversation with the caller as a participant
+  // (findOne), the organization route finds a company conversation (findOne);
+  // a sendAsOrganizationId send reads it by id. Any of them is "a read".
+  const restores = ["findById", "findOne"].map((method) =>
+    stub(conversationModel, method, (filter) => {
+      lookups.push(filter);
+      return query(null);
+    })
+  );
+  const restore = () => restores.forEach((undo) => undo());
 
   const cases = [
     ["POST /messages", "/v1/api/messages", { conversationId: oid(), body: "hi" }],
