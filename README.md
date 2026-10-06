@@ -212,6 +212,7 @@ forwarded `true`, which always goes. When a socket disconnects, it sends
 | `INVALID_PAYLOAD` | The payload was not an object, or (`field: "messageType"`) its `messageType` is missing or not one a client may send, or (`field: "attachments"`) a `STICKER` failed the [sticker check](#stickers); `_id` echoes the client's id |
 | `MESSAGE_SEND_FAILED` | Storing the message failed (`message` says why), after any [retries](#send-order-and-retries); `_id` echoes the client's id and `conversationId` the payload's (null for a first message sent with `receiverId` only). Nothing was delivered |
 | `RATE_LIMITED` | More than 10 `REACT_MESSAGE` in 10 s from this socket; `messageId` echoes the client's |
+| `ORDER_COMPLETED` | `NEW_MESSAGE` / `NEW_GROUP_MESSAGE` into the chat of an order that is `COMPLETED` (see [Order conversations](#order-conversations)). Checked inside the send's transaction, which is aborted and not retried: nothing was stored, delivered or pushed. `_id` and `conversationId` as for `MESSAGE_SEND_FAILED` |
 
 ### Resending a message
 
@@ -318,6 +319,14 @@ seemuehub-backend creates an order's conversation when the order is created
 syncs `orderStatus` / `isOrderActive` onto it as the order moves, including
 `CANCELLED`. A finished or cancelled order keeps its chat: nothing here
 deletes or hides it.
+
+Once the order is `COMPLETED` its chat is closed to its parties
+(`worktrees/CHAT-CONTRACT.md` §1.10, `src/utils/order-chat.ts`): a socket
+send is refused with `ERROR` `ORDER_COMPLETED`, and `POST /messages` with
+`403 { success: false, errors: { code: "ORDER_COMPLETED", message } }`. The
+chat stays readable, and reactions still work. The service's own messages
+still arrive: the backend's order steps (`POST /orders`) and Seemue AI's
+`AGENT` messages. `CANCELLED` and `REFUNDED` orders keep an open chat.
 
 - `GET /conversations` lists every conversation of the caller, cancelled
   orders included. `?orderStatus=NOT_COMPLETE` leaves out `COMPLETED` and

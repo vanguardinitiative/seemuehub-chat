@@ -14,6 +14,7 @@ import type { DeliveredConversation } from "@/utils/delivered";
 import { logEvent, refuse } from "@/socket/auth";
 import { resolveReply } from "./reply";
 import { isBlocked } from "@/utils/org-chat";
+import { isCompletedOrderChat } from "@/utils/order-chat";
 import { withSendTransaction } from "@/utils/transaction";
 import { serialize } from "@/utils/serialize";
 
@@ -30,6 +31,32 @@ class BlockedConversationError extends Error {
     this.name = "BlockedConversationError";
   }
 }
+
+/**
+ * Thrown inside the send's transaction when the conversation is an order's
+ * chat and the order is COMPLETED (CHAT-CONTRACT.md §1.10): the transaction
+ * is aborted - not retried, it is not transient - so neither the message nor
+ * the conversation's latest message is kept, nothing is published or pushed,
+ * and the sender gets ERROR ORDER_COMPLETED.
+ */
+class OrderCompletedError extends Error {
+  constructor(readonly conversationId: string | null) {
+    super("ORDER_COMPLETED");
+    this.name = "OrderCompletedError";
+  }
+}
+
+/** Refuses a send in a COMPLETED order's chat, on the conversation the send's update returned. */
+const refuseCompletedOrderChat = (conversation: { _id?: unknown; orderStatus?: unknown } | null): void => {
+  if (isCompletedOrderChat(conversation)) throw new OrderCompletedError(conversation?._id ? String(conversation._id) : null);
+};
+
+/** ERROR ORDER_COMPLETED to the sender, with the ids MESSAGE_SEND_FAILED carries. */
+const refuseOrderCompleted = (socket: Socket, event: SendEvent, data: MessageData, error: OrderCompletedError): void => {
+  const conversationId = data?.conversationId ?? error.conversationId ?? null;
+  logEvent({ msg: "message_refused", event, code: "ORDER_COMPLETED", socketId: socket?.id, userId: data?.senderId ? String(data.senderId) : null, conversationId });
+  refuse(socket, event, "ORDER_COMPLETED", { conversationId, _id: data?._id ?? null });
+};
 
 interface MessageData {
   messageType: string;
@@ -245,8 +272,10 @@ const storePrivateMessage = async (socket: Socket, data: MessageData): Promise<v
           { new: true, session }
         );
         // Checked on the conversation the update returned, inside the
-        // transaction, so a block that lands meanwhile is honoured too.
+        // transaction, so a block - or the order completing - that lands
+        // meanwhile is honoured too.
         if (isBlocked(conversationData)) throw new BlockedConversationError();
+        refuseCompletedOrderChat(conversationData);
         // const messageStatusData = conversationData?.participants
         //   .map((participant: IParticipant) => {
         //     if (participant.user.toString() !== data.senderId) {
@@ -277,6 +306,7 @@ const storePrivateMessage = async (socket: Socket, data: MessageData): Promise<v
       refuse(socket, "NEW_MESSAGE", "ORG_CHAT_BLOCKED", { conversationId: data?.conversationId ?? null, _id: data?._id ?? null });
       return;
     }
+    if (error instanceof OrderCompletedError) return refuseOrderCompleted(socket, "NEW_MESSAGE", data, error);
     await failSend(socket, "NEW_MESSAGE", data, error, resentIdOf(data, customId, attempts));
   }
 };
@@ -345,6 +375,8 @@ const storeGroupMessage = async (socket: Socket, data: MessageData): Promise<voi
           },
           { new: true, session }
         );
+        // As in a private send: an order's chat closes when it completes.
+        refuseCompletedOrderChat(conversationData);
         return { conversationData, messageData };
       },
       { onRetry: logRetry(socket, "NEW_GROUP_MESSAGE", data) }
@@ -361,6 +393,7 @@ const storeGroupMessage = async (socket: Socket, data: MessageData): Promise<voi
       void createMessageStatuses(conversationData, messageData);
     }
   } catch (error) {
+    if (error instanceof OrderCompletedError) return refuseOrderCompleted(socket, "NEW_GROUP_MESSAGE", data, error);
     await failSend(socket, "NEW_GROUP_MESSAGE", data, error, resentIdOf(data, customId, attempts));
   }
 };

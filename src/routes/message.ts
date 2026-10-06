@@ -13,6 +13,7 @@ import { participantOf } from "@/utils/conversation-access";
 import { isObjectIdString } from "@/utils/ids";
 import { isBlocked, organizationOf } from "@/utils/org-chat";
 import { OrgChatRefusal, announceOrgMessage, sendAsOrganization } from "@/services/org-chat";
+import { ORDER_COMPLETED_MESSAGE, isCompletedOrderChat } from "@/utils/order-chat";
 const messageRoute: IRouter = Router();
 
 /** POST /messages' refusals: `{ success: false, errors: { code, message } }`, the type and sticker ones with their CHAT-400 fields too. */
@@ -53,12 +54,16 @@ messageRoute.post("/", checkAuthorizationMiddleware, async (req, res) => {
     // used to take any conversation id from any signed-in user.
     const conversation: any = await conversationModel
       .findOne({ _id: conversationId, ...participantOf(actorUserId) })
-      .select("_id organizationId candidateUserId candidateBlockedAt participants")
+      .select("_id organizationId candidateUserId candidateBlockedAt participants orderStatus")
       .lean();
     if (!conversation) return void res.status(404).json(NOT_FOUND);
     // The candidate blocked this company: neither side writes in it again.
     if (isBlocked(conversation))
       return void res.status(403).json(refused("ORG_CHAT_BLOCKED", "ທ່ານໄດ້ບລັອກບໍລິສັດນີ້ແລ້ວ"));
+    // The order is COMPLETED: its chat no longer takes the parties' messages
+    // (CHAT-CONTRACT.md §1.10). Nothing is stored or announced.
+    if (isCompletedOrderChat(conversation))
+      return void res.status(403).json(refused("ORDER_COMPLETED", ORDER_COMPLETED_MESSAGE));
 
     const message = await messageModel.create({
       sender: actorUserId,
