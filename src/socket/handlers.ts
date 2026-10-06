@@ -29,6 +29,7 @@ import {
 } from "@/utils/reactions";
 import { idString } from "@/utils/ids";
 import { checkSticker } from "@/utils/sticker";
+import { serialize } from "@/utils/serialize";
 import { makeRoomForTyping, membershipExpired, newTypingEntry, stillTyping, typingPasses, type TypingEntry } from "./typing";
 
 /**
@@ -303,6 +304,15 @@ const handleSetup = async (socket: Socket, deps: SocketDeps, raw: unknown): Prom
   await deps.publish("SETUP", JSON.stringify(message));
 };
 
+/**
+ * NEW_MESSAGE / NEW_GROUP_MESSAGE. A socket's messages are checked one at a
+ * time, in the order they came, and each is handed to its controller before
+ * the next one's checks start. The controller queues it behind its
+ * conversation's earlier sends at once (utils/serialize.ts), so an album and
+ * the caption sent right after it are stored in that order even when their
+ * membership lookups answer the other way round. Only the checks wait for each
+ * other; the sends do not wait here.
+ */
 const handleMessage = async (
   event: "NEW_MESSAGE" | "NEW_GROUP_MESSAGE",
   io: Server,
@@ -310,13 +320,29 @@ const handleMessage = async (
   deps: SocketDeps,
   raw: unknown
 ): Promise<void> => {
+  const started = await serialize(`socket:${socket.id}`, async () => {
+    const send = await checkMessage(event, io, socket, deps, raw);
+    // Wrapped, so this socket's next message waits for the hand-over only.
+    return send ? { sending: send() } : null;
+  });
+  if (started) await started.sending;
+};
+
+/** A message's checks: resolves to its send, or to null once it has been refused. */
+const checkMessage = async (
+  event: "NEW_MESSAGE" | "NEW_GROUP_MESSAGE",
+  io: Server,
+  socket: Socket,
+  deps: SocketDeps,
+  raw: unknown
+): Promise<(() => Promise<void>) | null> => {
   const claimedSenderId = raw && typeof raw === "object" ? (raw as Record<string, unknown>).senderId : undefined;
   const actor = actorFor(socket, event, deps.mode, claimedSenderId);
-  if (!actor) return;
+  if (!actor) return null;
 
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     refuse(socket, event, "INVALID_PAYLOAD");
-    return;
+    return null;
   }
 
   // SYSTEM, ORDER_* and AGENT are the service's own messages (see
@@ -335,7 +361,7 @@ const handleMessage = async (
       userId: actor.kind === "verified" ? actor.userId : null,
     });
     refuse(socket, event, "INVALID_PAYLOAD", { field: "messageType", _id });
-    return;
+    return null;
   }
 
   const message = withoutReservedFields(raw as Record<string, unknown>);
@@ -355,7 +381,7 @@ const handleMessage = async (
         userId: actor.kind === "verified" ? actor.userId : null,
       });
       refuse(socket, event, "INVALID_PAYLOAD", { field: "attachments", _id: message._id ?? null });
-      return;
+      return null;
     }
     message.content = sticker.content;
     message.attachments = sticker.attachments;
@@ -366,8 +392,7 @@ const handleMessage = async (
   // Legacy (permissive only): the payload's senderId is trusted, as it
   // always was. This path goes away with SOCKET_AUTH_MODE=enforce.
   if (actor.kind === "legacy") {
-    await send(socket, io, message);
-    return;
+    return () => send(socket, io, message);
   }
 
   if (message.senderId !== undefined && message.senderId !== actor.userId) {
@@ -384,11 +409,11 @@ const handleMessage = async (
     if (!isObjectId(conversationId) || !(await deps.isParticipant(conversationId, actor.userId))) {
       logEvent({ msg: "message_refused", event, code: "NOT_PARTICIPANT", socketId: socket.id, userId: actor.userId, conversationId: conversationId ?? null });
       refuse(socket, event, "NOT_PARTICIPANT", { conversationId: conversationId ?? null, _id: message._id ?? null });
-      return;
+      return null;
     }
   }
 
-  await send(socket, io, message);
+  return () => send(socket, io, message);
 };
 
 /** The socket's REACT_MESSAGE timestamps for the rate limit (allowInWindow). */

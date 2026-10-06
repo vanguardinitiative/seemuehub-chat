@@ -114,7 +114,7 @@ for (const [label, send, event] of SENDS) {
       isDeleted: false,
     });
 
-    await t.test("is confirmed with the stored message, after the transaction is aborted, and no ERROR", async () => {
+    await t.test("is confirmed with the stored message, after the transaction is aborted and the session ended, and no ERROR", async () => {
       const _id = oid();
       const stored = storedMessage(_id);
       const run = install({ insertError: duplicateId(_id), stored });
@@ -128,7 +128,8 @@ for (const [label, send, event] of SENDS) {
       assert.deepStrictEqual(run.emitted, [
         { event: "CONVERSATION_LISTENING", payload: { type: "NEW_MESSAGE", response: JSON.parse(JSON.stringify(stored)) } },
       ]);
-      assert.deepStrictEqual(run.steps, ["start", "insert", "abort", "lookup", "end"]);
+      // The lookup runs once the session is over (utils/transaction.ts ends it).
+      assert.deepStrictEqual(run.steps, ["start", "insert", "abort", "end", "lookup"]);
       assert.strictEqual(run.lookups.length, 1);
       assert.strictEqual(String(run.lookups[0]._id), _id);
       assert.strictEqual(String(run.lookups[0].sender), sender, "only the same sender's message");
@@ -150,7 +151,8 @@ for (const [label, send, event] of SENDS) {
       assert.strictEqual(run.emitted[0].payload.code, "MESSAGE_SEND_FAILED");
       assert.strictEqual(run.emitted[0].payload.event, event);
       assert.strictEqual(run.emitted[0].payload._id, _id);
-      assert.deepStrictEqual(run.steps, ["start", "insert", "abort", "lookup", "end"]);
+      // The lookup runs once the session is over (utils/transaction.ts ends it).
+      assert.deepStrictEqual(run.steps, ["start", "insert", "abort", "end", "lookup"]);
     });
 
     await t.test("a duplicate on another key: ERROR, no lookup", async () => {
@@ -201,7 +203,7 @@ for (const [label, send, event] of SENDS) {
         run.restore();
       }
       assert.deepStrictEqual(run.emitted.map((e) => e.event), ["ERROR"]);
-      assert.strictEqual(run.steps.at(-1), "end");
+      assert.deepStrictEqual(run.steps, ["start", "insert", "abort", "end", "lookup"]);
     });
   });
 }

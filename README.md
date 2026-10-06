@@ -210,7 +210,7 @@ forwarded `true`, which always goes. When a socket disconnects, it sends
 | `TOKEN_EXPIRED` | The connection's token has expired since it connected: refresh, reconnect, retry |
 | `NOT_PARTICIPANT` | Not a participant of `conversationId` (or, for `REACT_MESSAGE`, of the message's conversation); nothing was stored, joined or sent |
 | `INVALID_PAYLOAD` | The payload was not an object, or (`field: "messageType"`) its `messageType` is missing or not one a client may send, or (`field: "attachments"`) a `STICKER` failed the [sticker check](#stickers); `_id` echoes the client's id |
-| `MESSAGE_SEND_FAILED` | Storing the message failed (`message` says why); `_id` echoes the client's id |
+| `MESSAGE_SEND_FAILED` | Storing the message failed (`message` says why), after any [retries](#send-order-and-retries); `_id` echoes the client's id and `conversationId` the payload's (null for a first message sent with `receiverId` only). Nothing was delivered |
 | `RATE_LIMITED` | More than 10 `REACT_MESSAGE` in 10 s from this socket; `messageId` echoes the client's |
 
 ### Resending a message
@@ -224,6 +224,31 @@ resend is answered, to the resending socket only, with the stored message on
 again; each such resend logs `{"msg":"message_resent",...}`. An `_id` that
 belongs to someone else's message is still `MESSAGE_SEND_FAILED`. Same for
 `NEW_GROUP_MESSAGE`.
+
+### Send order and retries
+
+Every send updates its conversation's document (`latestMessageData`) in the
+same transaction as the insert, so two sends to one conversation at once (an
+album and the caption sent right after it) used to collide: the second died
+of a WriteConflict with `MESSAGE_SEND_FAILED`. Now
+(`worktrees/CHAT-CONTRACT.md` §1.8):
+
+- A socket's `NEW_MESSAGE` / `NEW_GROUP_MESSAGE` are checked in the order
+  they came, and each is queued on its conversation (`src/utils/serialize.ts`;
+  a first message without a `conversationId` on the pair of users) before the
+  next one is checked. One instance stores a conversation's messages one at a
+  time, in that order. The queue is per process: sends on another instance
+  are not queued with these.
+- A transaction that fails transiently (`TransientTransactionError`, or code
+  112 WriteConflict: another instance's send, a read or delivered mark) is run
+  again on a fresh session, up to 3 runs in all, 20–80 ms apart, with the same
+  `_id`. A commit whose outcome is unknown (`UnknownTransactionCommitResult`)
+  is committed again, not rerun (`src/utils/transaction.ts`). Each retry logs
+  `{"msg":"message_send_retry",...}`.
+- `SEND_MESSAGE` (and the push) goes out only after the commit, so a message
+  that was not stored is never delivered.
+- A rerun that hits the duplicate key because an earlier run did commit is
+  [confirmed](#resending-a-message) to the sender like a resend.
 
 ### `SOCKET_AUTH_MODE`
 
