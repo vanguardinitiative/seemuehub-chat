@@ -5,6 +5,8 @@
  * that ships a new step before this service does is visible, not silent.
  */
 const ORDER_STEP_MESSAGES: Record<string, string> = {
+  // A buyer placed an order; the seller has not taken it yet.
+  ORDER_PLACED: "ມີການສັ່ງວຽກໃໝ່ — ລໍຖ້າຟຣີແລນຊ໌ຮັບວຽກ",
   SUBMITTED_PROPOSAL: "ສ້າງໃບສະເໜີລາຄາສຳເລັດເເລ້ວ ສາມາດກວດສອບໄດ້ເລີຍ",
   ACCEPTED_PROPOSAL: "ອະນຸມັດໃບສະເໜີລາຄາສຳເລັດເເລ້ວ",
   REJECTED_PROPOSAL: "ປະຕິເສດໃບສະເໜີລາຄາ",

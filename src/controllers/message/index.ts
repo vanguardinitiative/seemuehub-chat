@@ -14,6 +14,8 @@ import type { DeliveredConversation } from "@/utils/delivered";
 import { logEvent, refuse } from "@/socket/auth";
 import { resolveReply } from "./reply";
 import { isBlocked } from "@/utils/org-chat";
+import { withSendTransaction } from "@/utils/transaction";
+import { serialize } from "@/utils/serialize";
 
 /**
  * Thrown inside the send's transaction when the conversation is a company
@@ -47,23 +49,14 @@ interface MessageData {
   replyTo?: unknown;
 }
 
-/** Aborts the send's transaction; a failure to abort is logged, never thrown over the send's own error. */
-const abortQuietly = async (session: mongoose.ClientSession): Promise<void> => {
-  try {
-    if (typeof session.inTransaction !== "function" || session.inTransaction()) {
-      await session.abortTransaction();
-    }
-  } catch (error) {
-    console.error("Error aborting message transaction:", error instanceof Error ? error.message : "Unknown error");
-  }
-};
-
 /** A duplicate key on a message's _id (the only unique key a message has). */
 const isDuplicateId = (error: unknown): boolean => {
   const { code, keyPattern } = (error ?? {}) as { code?: unknown; keyPattern?: Record<string, unknown> };
   if (code !== 11000) return false;
   return !keyPattern || Object.prototype.hasOwnProperty.call(keyPattern, "_id");
 };
+
+type SendEvent = "NEW_MESSAGE" | "NEW_GROUP_MESSAGE";
 
 /**
  * A resend of a message that was already stored (CHAT-CONTRACT.md §1.7). A
@@ -73,31 +66,121 @@ const isDuplicateId = (error: unknown): boolean => {
  * is answered with the stored message on CONVERSATION_LISTENING NEW_MESSAGE,
  * to the resending socket only, instead of an ERROR: the retry confirms it.
  * Nothing is stored, published or pushed again. Someone else's `_id` is still
- * an error. Call it after the transaction is aborted: the lookup runs outside
- * it.
+ * an error. The same goes for the send's own retry (utils/transaction.ts)
+ * after a commit that went through unseen: `messageId` is then the id the
+ * service chose. Call it after the transaction is over: the lookup runs
+ * outside it.
  */
 const confirmResentMessage = async (
   socket: Socket,
-  event: "NEW_MESSAGE" | "NEW_GROUP_MESSAGE",
+  event: SendEvent,
   data: MessageData,
+  messageId: string | null,
   error: unknown
 ): Promise<boolean> => {
-  if (!data?._id || !data.senderId || !isDuplicateId(error)) return false;
-  if (!mongoose.Types.ObjectId.isValid(data._id) || !mongoose.Types.ObjectId.isValid(String(data.senderId))) return false;
-  const stored = await messageModel.findOne({ _id: data._id, sender: data.senderId }).lean();
+  if (!messageId || !data?.senderId || !isDuplicateId(error)) return false;
+  if (!mongoose.Types.ObjectId.isValid(messageId) || !mongoose.Types.ObjectId.isValid(String(data.senderId))) return false;
+  const stored = await messageModel.findOne({ _id: messageId, sender: data.senderId }).lean();
   if (!stored) return false;
   // The shape SEND_MESSAGE delivers: the stored message through JSON.
   socket.emit("CONVERSATION_LISTENING", { type: "NEW_MESSAGE", response: JSON.parse(JSON.stringify(stored)) });
-  logEvent({ msg: "message_resent", event, socketId: socket.id, userId: String(data.senderId), _id: String(data._id) });
+  logEvent({ msg: "message_resent", event, socketId: socket.id, userId: String(data.senderId), _id: messageId });
   return true;
 };
 
-const sendPrivateMessage = async (socket: Socket, io: Server, data: MessageData): Promise<void> => {
-  const session = await mongoose.startSession();
+/**
+ * The queue a send waits in (utils/serialize.ts): its conversation, or for a
+ * first message, which has none yet, the two people whose conversation it
+ * finds or creates. Null for a payload that is refused anyway.
+ */
+const sendQueueKey = (data: MessageData): string | null => {
+  if (data?.conversationId) return `conversation:${String(data.conversationId)}`;
+  if (data?.senderId && data?.receiverId) return `pair:${[String(data.senderId), String(data.receiverId)].sort().join(":")}`;
+  return null;
+};
+
+/**
+ * Runs a send once the sends that came before it to the same conversation
+ * are done, so they commit one at a time, in order, instead of conflicting on
+ * the conversation document. The place in line is taken by this call.
+ */
+const inConversationOrder = (data: MessageData, send: () => Promise<void>): Promise<void> => {
+  const key = sendQueueKey(data);
+  return key ? serialize(key, send) : send();
+};
+
+/** One JSON line per retried send (utils/transaction.ts), ids only. */
+const logRetry = (socket: Socket, event: SendEvent, data: MessageData) => (attempt: number, error: unknown) => {
+  logEvent({
+    msg: "message_send_retry",
+    event,
+    attempt,
+    code: (error as { code?: unknown } | null)?.code ?? null,
+    socketId: socket?.id,
+    userId: String(data.senderId),
+    conversationId: data.conversationId ?? null,
+    _id: data._id ?? null,
+  });
+};
+
+/**
+ * SEND_MESSAGE for a message whose transaction committed: never before, so a
+ * message that was not kept is never delivered. Never throws: the message is
+ * stored whatever happens here.
+ */
+const publishStoredMessage = (conversationData: unknown, messageData: unknown): void => {
+  try {
+    void pub.publish("SEND_MESSAGE", JSON.stringify({ conversation: conversationData, messageData }));
+  } catch (error) {
+    console.error("Error publishing a stored message:", error instanceof Error ? error.message : "Unknown error");
+  }
+};
+
+/**
+ * A send that was not stored: ERROR MESSAGE_SEND_FAILED to the sender, with
+ * its `_id` and `conversationId` to find the message by. Unless the duplicate
+ * key says it is stored after all (confirmResentMessage).
+ */
+const failSend = async (
+  socket: Socket,
+  event: SendEvent,
+  data: MessageData,
+  error: unknown,
+  messageId: string | null
+): Promise<void> => {
+  try {
+    if (await confirmResentMessage(socket, event, data, messageId, error)) return;
+  } catch (lookupError) {
+    console.error("Error confirming a resent message:", lookupError instanceof Error ? lookupError.message : "Unknown error");
+  }
+  console.error("Error sending message:", error instanceof Error ? error.message : "Unknown error");
+  socket.emit("ERROR", {
+    code: "MESSAGE_SEND_FAILED",
+    message: error instanceof Error ? error.message : "Unknown error",
+    event,
+    conversationId: data?.conversationId ?? null,
+    _id: data?._id ?? null,
+  });
+};
+
+/**
+ * The id a failed send's duplicate key is checked against: the client's, or,
+ * once the transaction has been retried, the one the service chose (an
+ * earlier run may have committed it).
+ */
+const resentIdOf = (data: MessageData, messageId: mongoose.Types.ObjectId | null, attempts: number): string | null => {
+  if (data?._id) return String(data._id);
+  return messageId && attempts > 1 ? String(messageId) : null;
+};
+
+const sendPrivateMessage = (socket: Socket, io: Server, data: MessageData): Promise<void> =>
+  inConversationOrder(data, () => storePrivateMessage(socket, data));
+
+const storePrivateMessage = async (socket: Socket, data: MessageData): Promise<void> => {
+  let attempts = 0;
+  let customId: mongoose.Types.ObjectId | null = null;
 
   try {
-    session.startTransaction();
-
     if (data._id && !mongoose.Types.ObjectId.isValid(data._id)) {
       throw new Error("Invalid _id format");
     }
@@ -106,128 +189,106 @@ const sendPrivateMessage = async (socket: Socket, io: Server, data: MessageData)
       throw new Error("messageType, content, senderId, and a conversationId or receiverId are required");
     }
 
-    const conversation = !data.conversationId
-      ? await createOrGetConversation(data.senderId, data.receiverId as string, session)
-      : null;
+    // Chosen once: a retried transaction inserts the same message.
+    const messageId = data._id ? new mongoose.Types.ObjectId(data._id) : new mongoose.Types.ObjectId();
+    customId = messageId;
 
-    const newConversationId = conversation?._id || data.conversationId;
-    const customId = data._id ? new mongoose.Types.ObjectId(data._id) : new mongoose.Types.ObjectId();
-    // Checked against the conversation just resolved; an invalid reply is
-    // dropped and the message still goes (CHAT-CONTRACT.md §2.2).
-    const reply = await resolveReply(data.replyTo, newConversationId, session, {
-      event: "NEW_MESSAGE",
-      socketId: socket?.id,
-      userId: String(data.senderId),
-    });
+    const { conversationData, messageData } = await withSendTransaction(
+      async (session, attempt) => {
+        attempts = attempt;
+        const conversation = !data.conversationId
+          ? await createOrGetConversation(data.senderId, data.receiverId as string, session)
+          : null;
 
-    const [messageData] = await messageModel.create(
-      [
-        {
-          ...data,
-          ...reply,
-          reactions: undefined,
-          _id: customId,
-          messageType: data.messageType,
-          // fileUploaded: data.messageType === MessageType.IMAGE ? false : true,
-          fileUploaded: true,
-          sender: data.senderId,
-          content: data.content,
-          conversation: newConversationId,
-          sendAt: new Date(),
-          createdAt: new Date(),
-        },
-      ],
-      { session }
-    );
+        const newConversationId = conversation?._id || data.conversationId;
+        // Checked against the conversation just resolved; an invalid reply is
+        // dropped and the message still goes (CHAT-CONTRACT.md §2.2).
+        const reply = await resolveReply(data.replyTo, newConversationId, session, {
+          event: "NEW_MESSAGE",
+          socketId: socket?.id,
+          userId: String(data.senderId),
+        });
 
-    const conversationData = await conversationModel.findByIdAndUpdate(
-      newConversationId,
-      {
-        latestMessageData: {
-          senderId: data.senderId,
-          messageId: messageData._id,
-          messageType: messageData.messageType,
-          content: data.content,
-          readAllAt: null,
-          sendAt: new Date(),
-          deliveredAllAt: new Date(),
-        },
+        const [messageData] = await messageModel.create(
+          [
+            {
+              ...data,
+              ...reply,
+              reactions: undefined,
+              _id: messageId,
+              messageType: data.messageType,
+              // fileUploaded: data.messageType === MessageType.IMAGE ? false : true,
+              fileUploaded: true,
+              sender: data.senderId,
+              content: data.content,
+              conversation: newConversationId,
+              sendAt: new Date(),
+              createdAt: new Date(),
+            },
+          ],
+          { session }
+        );
+
+        const conversationData = await conversationModel.findByIdAndUpdate(
+          newConversationId,
+          {
+            latestMessageData: {
+              senderId: data.senderId,
+              messageId: messageData._id,
+              messageType: messageData.messageType,
+              content: data.content,
+              readAllAt: null,
+              sendAt: new Date(),
+              deliveredAllAt: new Date(),
+            },
+          },
+          { new: true, session }
+        );
+        // Checked on the conversation the update returned, inside the
+        // transaction, so a block that lands meanwhile is honoured too.
+        if (isBlocked(conversationData)) throw new BlockedConversationError();
+        // const messageStatusData = conversationData?.participants
+        //   .map((participant: IParticipant) => {
+        //     if (participant.user.toString() !== data.senderId) {
+        //       return {
+        //         message: messageData._id,
+        //         user: participant.user,
+        //         conversation: conversationData?._id,
+        //       };
+        //     }
+        //     return null;
+        //   })
+        //   .filter(Boolean);
+        // await messageStatusModel.insertMany(messageStatusData, { session });/
+        return { conversationData, messageData };
       },
-      { new: true, session }
-    );
-    // Checked on the conversation the update returned, inside the
-    // transaction, so a block that lands meanwhile is honoured too. Before
-    // anything is published.
-    if (isBlocked(conversationData)) throw new BlockedConversationError();
-    // const messageStatusData = conversationData?.participants
-    //   .map((participant: IParticipant) => {
-    //     if (participant.user.toString() !== data.senderId) {
-    //       return {
-    //         message: messageData._id,
-    //         user: participant.user,
-    //         conversation: conversationData?._id,
-    //       };
-    //     }
-    //     return null;
-    //   })
-    //   .filter(Boolean);
-    // await messageStatusModel.insertMany(messageStatusData, { session });/
-
-    // console.log("conversationData", conversationData);
-    pub.publish(
-      "SEND_MESSAGE",
-      JSON.stringify({
-        conversation: conversationData,
-        messageData,
-      })
+      { onRetry: logRetry(socket, "NEW_MESSAGE", data) }
     );
 
-
-    // if (data.messageType !== MessageType.IMAGE) {
-    //   pub.publish(
-    //     "SEND_MESSAGE",
-    //     JSON.stringify({
-    //       conversation: conversationData,
-    //       messageData,
-    //     })
-    //   );
-    // }
-
-    await session.commitTransaction();
+    publishStoredMessage(conversationData, messageData);
 
     // After the commit, and not awaited: a push to the other participants'
     // phones through the backend, which can neither delay nor fail the
     // message (src/services/chat-push.ts). Never to the sender.
     void pushChatMessage(conversationData, messageData);
   } catch (error) {
-    await abortQuietly(session);
     if (error instanceof BlockedConversationError) {
       logEvent({ msg: "message_refused", event: "NEW_MESSAGE", code: "ORG_CHAT_BLOCKED", socketId: socket?.id, conversationId: data?.conversationId ?? null });
       refuse(socket, "NEW_MESSAGE", "ORG_CHAT_BLOCKED", { conversationId: data?.conversationId ?? null, _id: data?._id ?? null });
       return;
     }
-    try {
-      if (await confirmResentMessage(socket, "NEW_MESSAGE", data, error)) return;
-    } catch (lookupError) {
-      console.error("Error confirming a resent message:", lookupError instanceof Error ? lookupError.message : "Unknown error");
-    }
-    console.error("Error sending message:", error instanceof Error ? error.message : "Unknown error");
-    socket.emit("ERROR", {
-      code: "MESSAGE_SEND_FAILED",
-      message: error instanceof Error ? error.message : "Unknown error",
-      event: "NEW_MESSAGE",
-      _id: data?._id ?? null,
-    });
-  } finally {
-    session.endSession();
+    await failSend(socket, "NEW_MESSAGE", data, error, resentIdOf(data, customId, attempts));
   }
 };
-const sendGroupMessage = async (socket: Socket, io: Server, data: MessageData): Promise<void> => {
-  const session = await mongoose.startSession();
+
+const sendGroupMessage = (socket: Socket, io: Server, data: MessageData): Promise<void> =>
+  inConversationOrder(data, () => storeGroupMessage(socket, data));
+
+const storeGroupMessage = async (socket: Socket, data: MessageData): Promise<void> => {
+  let attempts = 0;
+  let customId: mongoose.Types.ObjectId | null = null;
 
   try {
-    session.startTransaction();
-
     if (data._id && !mongoose.Types.ObjectId.isValid(data._id)) {
       throw new Error("Invalid _id format");
     }
@@ -236,55 +297,60 @@ const sendGroupMessage = async (socket: Socket, io: Server, data: MessageData): 
       throw new Error("messageType, content, senderId, and receiverId are required");
     }
     const newConversationId = data.conversationId;
-    const customId = data._id ? new mongoose.Types.ObjectId(data._id) : new mongoose.Types.ObjectId();
-    const reply = await resolveReply(data.replyTo, newConversationId, session, {
-      event: "NEW_GROUP_MESSAGE",
-      socketId: socket?.id,
-      userId: String(data.senderId),
-    });
+    // Chosen once: a retried transaction inserts the same message.
+    const messageId = data._id ? new mongoose.Types.ObjectId(data._id) : new mongoose.Types.ObjectId();
+    customId = messageId;
 
-    const [messageData] = await messageModel.create(
-      [
-        {
-          ...data,
-          ...reply,
-          reactions: undefined,
-          _id: customId,
-          messageType: data.messageType,
-          // fileUploaded: data.messageType === MessageType.IMAGE ? false : true,
-          fileUploaded: true,
-          sender: data.senderId,
-          content: data.content,
-          conversation: newConversationId,
-          sendAt: new Date(),
-          createdAt: new Date(),
-        },
-      ],
-      { session }
-    );
+    const { conversationData, messageData } = await withSendTransaction(
+      async (session, attempt) => {
+        attempts = attempt;
+        const reply = await resolveReply(data.replyTo, newConversationId, session, {
+          event: "NEW_GROUP_MESSAGE",
+          socketId: socket?.id,
+          userId: String(data.senderId),
+        });
 
-    const conversationData = await conversationModel.findByIdAndUpdate(
-      newConversationId,
-      {
-        latestMessageData: {
-          senderId: data.senderId,
-          messageId: messageData._id,
-          messageType: messageData.messageType,
-          content: data.content,
-          readAllAt: null,
-          sendAt: new Date(),
-          deliveredAllAt: new Date(),
-        },
+        const [messageData] = await messageModel.create(
+          [
+            {
+              ...data,
+              ...reply,
+              reactions: undefined,
+              _id: messageId,
+              messageType: data.messageType,
+              // fileUploaded: data.messageType === MessageType.IMAGE ? false : true,
+              fileUploaded: true,
+              sender: data.senderId,
+              content: data.content,
+              conversation: newConversationId,
+              sendAt: new Date(),
+              createdAt: new Date(),
+            },
+          ],
+          { session }
+        );
+
+        const conversationData = await conversationModel.findByIdAndUpdate(
+          newConversationId,
+          {
+            latestMessageData: {
+              senderId: data.senderId,
+              messageId: messageData._id,
+              messageType: messageData.messageType,
+              content: data.content,
+              readAllAt: null,
+              sendAt: new Date(),
+              deliveredAllAt: new Date(),
+            },
+          },
+          { new: true, session }
+        );
+        return { conversationData, messageData };
       },
-      { new: true, session }
+      { onRetry: logRetry(socket, "NEW_GROUP_MESSAGE", data) }
     );
-    pub.publish(
-      "SEND_MESSAGE",
-      JSON.stringify({
-        conversation: conversationData,
-        messageData,
-      })
-    );
+
+    publishStoredMessage(conversationData, messageData);
     // Read receipts only. This also posted a "TAXI" push payload to
     // NOTIFICATION_URL - a leftover of the product this service was forked
     // from, which sent Seemuehub message text and sender details to whatever
@@ -292,36 +358,10 @@ const sendGroupMessage = async (socket: Socket, io: Server, data: MessageData): 
     // Seemuehub client sends group messages; pushes for private ones go
     // through the backend (pushChatMessage above).
     if (conversationData) {
-      createMessageStatuses(conversationData, messageData);
+      void createMessageStatuses(conversationData, messageData);
     }
-
-    // if (data.messageType !== MessageType.IMAGE) {
-    //   pub.publish(
-    //     "SEND_MESSAGE",
-    //     JSON.stringify({
-    //       conversation: conversationData,
-    //       messageData,
-    //     })
-    //   );
-    // }
-
-    await session.commitTransaction();
   } catch (error) {
-    await abortQuietly(session);
-    try {
-      if (await confirmResentMessage(socket, "NEW_GROUP_MESSAGE", data, error)) return;
-    } catch (lookupError) {
-      console.error("Error confirming a resent message:", lookupError instanceof Error ? lookupError.message : "Unknown error");
-    }
-    console.error("Error sending message:", error instanceof Error ? error.message : "Unknown error");
-    socket.emit("ERROR", {
-      code: "MESSAGE_SEND_FAILED",
-      message: error instanceof Error ? error.message : "Unknown error",
-      event: "NEW_GROUP_MESSAGE",
-      _id: data?._id ?? null,
-    });
-  } finally {
-    session.endSession();
+    await failSend(socket, "NEW_GROUP_MESSAGE", data, error, resentIdOf(data, customId, attempts));
   }
 };
 

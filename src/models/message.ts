@@ -135,6 +135,12 @@ export interface IMessage extends Document {
   // Order-related fields
   orderId?: mongoose.Types.ObjectId; // Reference to Order
   orderStatus?: string; // Order status when message was sent
+  /**
+   * An order step's message (POST /orders): the step it announces
+   * (ORDER_PLACED, SUBMITTED_PROPOSAL, …), so a client can draw the step's
+   * card without parsing `content`. Absent on every other message.
+   */
+  orderStep?: string;
   orderAction?: {
     type: string; // e.g., "status_change", "delivery", "revision_request"
     fromStatus?: string;
@@ -237,6 +243,10 @@ const messageSchema = new Schema<IMessage>(
       type: String,
       enum: Object.values(OrderStatus),
     },
+    // A step name, not an order status (that enum would fail the message):
+    // the backend adds steps over time. No default, so other messages are
+    // stored as before.
+    orderStep: String,
     orderAction: {
       type: {
         type: String,

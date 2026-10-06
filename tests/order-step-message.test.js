@@ -19,6 +19,7 @@ const { conversationModel } = require("../dist/models/conversation.js");
 const { messageModel } = require("../dist/models/message.js");
 
 const BACKEND_STEPS = [
+  "ORDER_PLACED",
   "SUBMITTED_PROPOSAL",
   "ACCEPTED_PROPOSAL",
   "REJECTED_PROPOSAL",
@@ -47,6 +48,13 @@ test("the new steps say what happened", () => {
   assert.match(orderStepMessage("AUTO_APPROVED"), /ອັດຕະໂນມັດ/);
   assert.match(orderStepMessage("DISPUTE_OPENED"), /ລາຍງານບັນຫາ/);
   assert.match(orderStepMessage("DISPUTE_REFUNDED"), /ຄືນເງິນ/);
+});
+
+test("ORDER_PLACED: a new order, waiting for the freelancer", () => {
+  const text = orderStepMessage("ORDER_PLACED");
+  assert.strictEqual(text, "ມີການສັ່ງວຽກໃໝ່ — ລໍຖ້າຟຣີແລນຊ໌ຮັບວຽກ");
+  assert.ok(text.includes("\u0EC1"), "ແ is the one character U+0EC1");
+  assert.ok(!text.includes("\u0EC0\u0EC0"), "not two ເ");
 });
 
 test("an unknown step still says something", () => {
@@ -165,6 +173,91 @@ test("POST /orders publishes ORDER with the conversation's fresh latestMessageDa
     }
   });
 
+  await t.test("the step's message carries its step and its order (orderStep, orderId), and stays a TEXT order message", async () => {
+    const body = backendCopy();
+    let created;
+    const restores = [
+      // Through the schema, as mongoose stores it: a field the schema lacks would be dropped.
+      stub(messageModel, "create", async (doc) => (created = new messageModel(doc))),
+      stub(conversationModel, "findByIdAndUpdate", async (id, update) => new conversationModel({ _id: id, participants: body.participants, ...update })),
+    ];
+    published.length = 0;
+    try {
+      const res = await post({ ...body, latestMessageData: { ...body.latestMessageData, orderStep: "ORDER_PLACED" } });
+      assert.strictEqual(res.status, 200);
+      assert.strictEqual(created.validateSync(), undefined, "a valid message");
+      assert.strictEqual(created.orderStep, "ORDER_PLACED");
+      assert.strictEqual(String(created.orderId), body.orderId);
+      assert.strictEqual(created.orderStatus, undefined, "a step is not an order status");
+      assert.strictEqual(created.messageType, "TEXT");
+      assert.strictEqual(created.isOrderMessage, true);
+      assert.strictEqual(created.content, orderStepMessage("ORDER_PLACED"));
+      // What NEW_MESSAGE delivers (config/redis.ts → deliverNewMessage) is the whole stored message.
+      const [sent] = published.filter((p) => p.channel === "SEND_MESSAGE").map((p) => p.message);
+      assert.strictEqual(sent.messageData.orderStep, "ORDER_PLACED");
+      assert.strictEqual(sent.messageData.orderId, body.orderId);
+      assert.strictEqual(sent.messageData.isOrderMessage, true);
+      assert.strictEqual(orderNotices()[0].latestMessageData.orderStep, "ORDER_PLACED");
+    } finally {
+      restores.reverse().forEach((restore) => restore());
+    }
+  });
+
+  await t.test("an orderId that is not an ObjectId: the message is still stored, without orderId", async () => {
+    const body = { ...backendCopy(), orderId: "order-123" };
+    // Passed through, it would fail the whole message.
+    assert.ok(new messageModel({ orderId: "order-123" }).validateSync()?.errors?.orderId);
+    let created;
+    const restores = [
+      stub(messageModel, "create", async (doc) => (created = new messageModel(doc))),
+      stub(conversationModel, "findByIdAndUpdate", async (id, update) => new conversationModel({ _id: id, participants: body.participants, ...update })),
+    ];
+    published.length = 0;
+    try {
+      const res = await post({ ...body, latestMessageData: { ...body.latestMessageData, orderStep: "COMPLETED" } });
+      assert.strictEqual(res.status, 200);
+      assert.ok(created, "stored");
+      assert.strictEqual(created.validateSync(), undefined);
+      assert.strictEqual(created.orderId, undefined);
+      assert.strictEqual(created.orderStep, "COMPLETED");
+      assert.deepStrictEqual(published.map((p) => p.channel), ["SEND_MESSAGE", "ORDER"]);
+      assert.strictEqual(published[0].message.messageData.orderStep, "COMPLETED");
+      assert.ok(!("orderId" in published[0].message.messageData));
+    } finally {
+      restores.reverse().forEach((restore) => restore());
+    }
+  });
+
   env.CHAT_INTERNAL_KEY = previousKey;
   server.close();
+});
+
+// ---------------------------------------------------------------- clients cannot forge one
+
+test("a client's NEW_MESSAGE carrying orderStep / orderId: both dropped before the controller", async () => {
+  const { startServer, tokenFor, connected, until } = require("./helpers/socket-harness");
+  const me = new Types.ObjectId().toString();
+  const conversationId = new Types.ObjectId().toString();
+  const server = await startServer({ mode: "enforce" });
+  try {
+    server.setMembers(conversationId, [me]);
+    const client = await connected(server.client({ token: tokenFor(me) }));
+    client.emit("NEW_MESSAGE", {
+      _id: new Types.ObjectId().toString(),
+      messageType: "TEXT",
+      content: "Order ສຳເລັດເເລ້ວ",
+      conversationId,
+      orderStep: "COMPLETED",
+      orderId: new Types.ObjectId().toString(),
+      isOrderMessage: true,
+    });
+    await until(() => server.calls.private.length === 1);
+    const [stored] = server.calls.private;
+    for (const field of ["orderStep", "orderId", "isOrderMessage"]) {
+      assert.ok(!(field in stored), `${field} must not reach the controller`);
+    }
+    assert.strictEqual(stored.content, "Order ສຳເລັດເເລ້ວ");
+  } finally {
+    await server.close();
+  }
 });

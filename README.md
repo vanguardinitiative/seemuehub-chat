@@ -88,8 +88,8 @@ and are refused with `ERROR` `INVALID_PAYLOAD`,
 
 Fields a client cannot set on a message: `sender`, `actorUserId`,
 `sendAsOrganizationId`, `isOrderMessage`, `orderId`, `orderStatus`,
-`orderAction`, `isDeleted`, `deletedAt`, `deletedBy`, `deliveredAllAt`,
-`readAllAt`, `replyPreview`, `reactions`, `agent`. They are dropped (the
+`orderStep`, `orderAction`, `isDeleted`, `deletedAt`, `deletedBy`,
+`deliveredAllAt`, `readAllAt`, `replyPreview`, `reactions`, `agent`. They are dropped (the
 REST sends never read them at all). `isReply` is always the service's own
 verdict on `replyTo`.
 
@@ -210,7 +210,7 @@ forwarded `true`, which always goes. When a socket disconnects, it sends
 | `TOKEN_EXPIRED` | The connection's token has expired since it connected: refresh, reconnect, retry |
 | `NOT_PARTICIPANT` | Not a participant of `conversationId` (or, for `REACT_MESSAGE`, of the message's conversation); nothing was stored, joined or sent |
 | `INVALID_PAYLOAD` | The payload was not an object, or (`field: "messageType"`) its `messageType` is missing or not one a client may send, or (`field: "attachments"`) a `STICKER` failed the [sticker check](#stickers); `_id` echoes the client's id |
-| `MESSAGE_SEND_FAILED` | Storing the message failed (`message` says why); `_id` echoes the client's id |
+| `MESSAGE_SEND_FAILED` | Storing the message failed (`message` says why), after any [retries](#send-order-and-retries); `_id` echoes the client's id and `conversationId` the payload's (null for a first message sent with `receiverId` only). Nothing was delivered |
 | `RATE_LIMITED` | More than 10 `REACT_MESSAGE` in 10 s from this socket; `messageId` echoes the client's |
 
 ### Resending a message
@@ -224,6 +224,31 @@ resend is answered, to the resending socket only, with the stored message on
 again; each such resend logs `{"msg":"message_resent",...}`. An `_id` that
 belongs to someone else's message is still `MESSAGE_SEND_FAILED`. Same for
 `NEW_GROUP_MESSAGE`.
+
+### Send order and retries
+
+Every send updates its conversation's document (`latestMessageData`) in the
+same transaction as the insert, so two sends to one conversation at once (an
+album and the caption sent right after it) used to collide: the second died
+of a WriteConflict with `MESSAGE_SEND_FAILED`. Now
+(`worktrees/CHAT-CONTRACT.md` §1.8):
+
+- A socket's `NEW_MESSAGE` / `NEW_GROUP_MESSAGE` are checked in the order
+  they came, and each is queued on its conversation (`src/utils/serialize.ts`;
+  a first message without a `conversationId` on the pair of users) before the
+  next one is checked. One instance stores a conversation's messages one at a
+  time, in that order. The queue is per process: sends on another instance
+  are not queued with these.
+- A transaction that fails transiently (`TransientTransactionError`, or code
+  112 WriteConflict: another instance's send, a read or delivered mark) is run
+  again on a fresh session, up to 3 runs in all, 20–80 ms apart, with the same
+  `_id`. A commit whose outcome is unknown (`UnknownTransactionCommitResult`)
+  is committed again, not rerun (`src/utils/transaction.ts`). Each retry logs
+  `{"msg":"message_send_retry",...}`.
+- `SEND_MESSAGE` (and the push) goes out only after the commit, so a message
+  that was not stored is never delivered.
+- A rerun that hits the duplicate key because an earlier run did commit is
+  [confirmed](#resending-a-message) to the sender like a resend.
 
 ### `SOCKET_AUTH_MODE`
 
@@ -306,6 +331,24 @@ deletes or hides it.
   `PENDING` 30 days after it was created `CANCELLED` and inactive. It only
   relabels the conversation (not the order in the backend), and the chat
   stays readable.
+
+### Order step messages
+
+`POST /orders` turns the step the backend posts
+(`latestMessageData.orderStep`: `ORDER_PLACED`, `SUBMITTED_PROPOSAL`, …,
+`DISPUTE_REFUNDED`) into a message (`src/controllers/order`):
+
+```js
+{ messageType: "TEXT", isOrderMessage: true, content: "<the step's Lao line>",
+  orderStep: "ORDER_PLACED", orderId: "<the conversation's orderId>" }
+```
+
+`content` is what old clients show, so it stays. `orderStep` and `orderId`
+let a new client draw the step's card without parsing `content`; both arrive
+with the message on `NEW_MESSAGE` and from `GET /messages`. `orderId` is left
+out when the conversation's is not an ObjectId (it would fail the message).
+`orderStep` is not `orderStatus`, which only takes order statuses. Messages
+stored before this have neither field. A client cannot set either one.
 
 ## Company conversations
 
@@ -420,7 +463,7 @@ Three routes are for seemuehub-backend only:
 
 | Route | Sent by the backend when | What it does here |
 | --- | --- | --- |
-| `POST /orders` | an order moves a step (`conversation.service` `updateOrderStep`) | stores a message in the order's conversation as the order's sender, and emits `ORDER` to its participants |
+| `POST /orders` | an order moves a step (`conversation.service` `updateOrderStep`) | stores the step's [message](#order-step-messages) in the order's conversation as the order's sender, and emits `ORDER` to its participants |
 | `POST /core-socket/payment` | IB Bank confirms a payment | emits `PAYMENT` to the payer |
 | `POST /agent-messages` | Seemue AI answers a request made in a chat | stores an [AGENT message](#seemue-ai-messages-agent) and delivers it |
 
