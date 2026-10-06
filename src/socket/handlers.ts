@@ -152,6 +152,8 @@ const RESERVED_MESSAGE_FIELDS = [
   "isOrderMessage",
   "orderId",
   "orderStatus",
+  // An order step's card (controllers/order): only POST /orders writes one.
+  "orderStep",
   "orderAction",
   "isDeleted",
   "deletedAt",

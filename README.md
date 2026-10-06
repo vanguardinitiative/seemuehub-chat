@@ -88,8 +88,8 @@ and are refused with `ERROR` `INVALID_PAYLOAD`,
 
 Fields a client cannot set on a message: `sender`, `actorUserId`,
 `sendAsOrganizationId`, `isOrderMessage`, `orderId`, `orderStatus`,
-`orderAction`, `isDeleted`, `deletedAt`, `deletedBy`, `deliveredAllAt`,
-`readAllAt`, `replyPreview`, `reactions`, `agent`. They are dropped (the
+`orderStep`, `orderAction`, `isDeleted`, `deletedAt`, `deletedBy`,
+`deliveredAllAt`, `readAllAt`, `replyPreview`, `reactions`, `agent`. They are dropped (the
 REST sends never read them at all). `isReply` is always the service's own
 verdict on `replyTo`.
 
@@ -332,6 +332,24 @@ deletes or hides it.
   relabels the conversation (not the order in the backend), and the chat
   stays readable.
 
+### Order step messages
+
+`POST /orders` turns the step the backend posts
+(`latestMessageData.orderStep`: `ORDER_PLACED`, `SUBMITTED_PROPOSAL`, …,
+`DISPUTE_REFUNDED`) into a message (`src/controllers/order`):
+
+```js
+{ messageType: "TEXT", isOrderMessage: true, content: "<the step's Lao line>",
+  orderStep: "ORDER_PLACED", orderId: "<the conversation's orderId>" }
+```
+
+`content` is what old clients show, so it stays. `orderStep` and `orderId`
+let a new client draw the step's card without parsing `content`; both arrive
+with the message on `NEW_MESSAGE` and from `GET /messages`. `orderId` is left
+out when the conversation's is not an ObjectId (it would fail the message).
+`orderStep` is not `orderStatus`, which only takes order statuses. Messages
+stored before this have neither field. A client cannot set either one.
+
 ## Company conversations
 
 A company chats with a candidate (`worktrees/ORG-CHAT-CONTRACT.md` §3,
@@ -445,7 +463,7 @@ Three routes are for seemuehub-backend only:
 
 | Route | Sent by the backend when | What it does here |
 | --- | --- | --- |
-| `POST /orders` | an order moves a step (`conversation.service` `updateOrderStep`) | stores a message in the order's conversation as the order's sender, and emits `ORDER` to its participants |
+| `POST /orders` | an order moves a step (`conversation.service` `updateOrderStep`) | stores the step's [message](#order-step-messages) in the order's conversation as the order's sender, and emits `ORDER` to its participants |
 | `POST /core-socket/payment` | IB Bank confirms a payment | emits `PAYMENT` to the payer |
 | `POST /agent-messages` | Seemue AI answers a request made in a chat | stores an [AGENT message](#seemue-ai-messages-agent) and delivers it |
 
