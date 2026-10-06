@@ -55,7 +55,8 @@ export type SocketErrorCode =
   | "INVALID_PAYLOAD"
   | "MESSAGE_SEND_FAILED"
   | "RATE_LIMITED"
-  | "ORG_CHAT_BLOCKED";
+  | "ORG_CHAT_BLOCKED"
+  | "ORDER_COMPLETED";
 
 const ERROR_MESSAGES: Record<SocketErrorCode, string> = {
   AUTH_REQUIRED: "Connect with auth: { token } to use this event",
@@ -65,6 +66,7 @@ const ERROR_MESSAGES: Record<SocketErrorCode, string> = {
   MESSAGE_SEND_FAILED: "Failed to send message",
   RATE_LIMITED: "Too many events; try again shortly",
   ORG_CHAT_BLOCKED: "This company conversation is blocked; nobody can send in it",
+  ORDER_COMPLETED: "This order is completed; its chat no longer takes messages",
 };
 
 /** Every refusal goes out as one `ERROR` event of this shape. */
