@@ -19,6 +19,7 @@
 const { published, cached, stub, query } = require("./helpers/offline");
 const { installBackend, installStore, oid } = require("./helpers/org-chat-fakes");
 const harness = require("./helpers/socket-harness");
+const { asSuperAdmin } = require("./helpers/admin-staff");
 const { collect, logged, nextEvent, settle, until } = harness;
 
 const test = require("node:test");
@@ -802,7 +803,7 @@ test("the lists show an AGENT message as stored, `agent` included", async (t) =>
   await t.test("GET /messages/admin", async () => {
     const conversation = orderConversation();
     const world = setup({ seed: { conversations: [conversation] } });
-    const admin = stub(userModel, "findById", (id) => query(String(id) === ADMIN ? { role: "ADMIN" } : { role: "USER" }));
+    const admin = asSuperAdmin(ADMIN);
     try {
       const message = await posted(world, conversation, BUYER);
       const res = await request(port, "GET", `/v1/api/messages/admin?conversationId=${conversation._id}`, { as: ADMIN });
@@ -811,7 +812,7 @@ test("the lists show an AGENT message as stored, `agent` included", async (t) =>
       assert.strictEqual(listed.messageType, "AGENT");
       assert.deepStrictEqual(listed.agent, message.agent);
     } finally {
-      admin();
+      admin.restore();
       world.restore();
     }
   });

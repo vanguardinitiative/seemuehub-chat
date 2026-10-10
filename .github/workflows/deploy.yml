@@ -39,6 +39,8 @@ jobs:
           #   BACKEND_URL (variable): the backend origin, no /api/v1.
           #   ORG_CHAT_ENABLED (variable): company chat switch, kept equal to the
           #     backend's variable of the same name.
+          #   ADMIN_SESSION_ENFORCED (variable): staff RBAC switch, turned on
+          #     together with the backend's ADMIN_SESSION_ENFORCED.
           if [ -n "${{ secrets.CHAT_INTERNAL_KEY }}" ]; then
             printf 'CHAT_INTERNAL_KEY=%s\n' '${{ secrets.CHAT_INTERNAL_KEY }}' >> .env
           fi
@@ -48,7 +50,10 @@ jobs:
           if [ -n "${{ vars.ORG_CHAT_ENABLED }}" ]; then
             printf 'ORG_CHAT_ENABLED=%s\n' '${{ vars.ORG_CHAT_ENABLED }}' >> .env
           fi
-          echo "extra env: $(grep -cE '^(CHAT_INTERNAL_KEY|BACKEND_URL|ORG_CHAT_ENABLED)=' .env) line(s)"
+          if [ -n "${{ vars.ADMIN_SESSION_ENFORCED }}" ]; then
+            printf 'ADMIN_SESSION_ENFORCED=%s\n' '${{ vars.ADMIN_SESSION_ENFORCED }}' >> .env
+          fi
+          echo "extra env: $(grep -cE '^(CHAT_INTERNAL_KEY|BACKEND_URL|ORG_CHAT_ENABLED|ADMIN_SESSION_ENFORCED)=' .env) line(s)"
           # The image now compiles from source, so the build needs room for a
           # full devDependency install. Repeated `--build` deploys leave the
           # host's build cache and superseded images behind until it runs out:

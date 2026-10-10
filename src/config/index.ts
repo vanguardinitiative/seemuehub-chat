@@ -111,6 +111,19 @@ export const messages = {
     code: "CHAT-409",
     message: "already exists",
   },
+  // Staff RBAC (worktrees/ADMIN-RBAC-CONTRACT.md §11), with the backend's texts.
+  ADMIN_SESSION_REQUIRED: {
+    code: "CHAT-401",
+    message: "An admin session is required",
+  },
+  ADMIN_PERMISSION_REQUIRED: {
+    code: "CHAT-403",
+    message: "You do not have permission for this admin action",
+  },
+  ADMIN_ACCESS_UNAVAILABLE: {
+    code: "CHAT-503",
+    message: "Admin access could not be checked right now. Try again shortly",
+  },
   //github change
 };
 

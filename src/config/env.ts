@@ -64,6 +64,18 @@ const envSchema = z.object({
     (value) => (typeof value === "string" && value.trim() !== "" ? value.trim().toLowerCase() : undefined),
     z.enum(["true", "false"]).default("false")
   ),
+
+  // Staff RBAC (worktrees/ADMIN-RBAC-CONTRACT.md §8, src/middleware/admin.ts).
+  // "true": the admin oversight endpoints take only an admin session - a
+  // password + TOTP token (`aud: "admin"`) of an ACTIVE, enrolled staff member
+  // whose sessionVersion still matches. "false" (the default) also lets a
+  // plain token of a not-yet-enrolled staff member through, with that
+  // member's own roles. Either way the roles must grant chats.read. The
+  // backend has a switch of the same name; both are turned on together.
+  ADMIN_SESSION_ENFORCED: z.preprocess(
+    (value) => (typeof value === "string" && value.trim() !== "" ? value.trim().toLowerCase() : undefined),
+    z.enum(["true", "false"]).default("false")
+  ),
 });
 
 export const env = envSchema.parse(process.env);
