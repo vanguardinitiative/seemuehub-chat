@@ -33,6 +33,7 @@ The tests need neither Mongo nor Redis.
 | `BACKEND_URL` | no | seemuehub-backend's origin (`https://api.seemuehub.com`, no `/api/v1`). With `CHAT_INTERNAL_KEY`, new private messages are pushed through it; see [Push notifications](#push-notifications). Not a URL: the service stops at boot |
 | `STICKER_URL_PREFIX` | no (`https://seemuehub-storage.s3.ap-southeast-1.amazonaws.com/images/`) | Where sticker images live; a `STICKER` message's attachment must start with it (see [Stickers](#stickers)). Only needs setting if the bucket moves. Not an https URL ending in `/`: the service stops at boot |
 | `ORG_CHAT_ENABLED` | no (`false`) | `true` turns on company ↔ candidate chat (see [Company conversations](#company-conversations)); needs `BACKEND_URL`, `CHAT_INTERNAL_KEY` and the backend's own `ORG_CHAT_ENABLED` |
+| `ADMIN_SESSION_ENFORCED` | no (`false`) | `true` lets only a password + TOTP admin session read chats; see [Admin oversight](#admin-oversight). Turned on together with the backend's own `ADMIN_SESSION_ENFORCED`. Any other value stops the service at boot |
 
 `.env.example` lists them all. In production these come from the `ENV`
 repository secret, which the deploy writes to `.env` for
@@ -498,6 +499,43 @@ Rollout:
 
 Rolling back is removing the key here (step 4). That also closes
 `/agent-messages` until the key is back.
+
+## Admin oversight
+
+`GET /conversations/admin` (every conversation) and `GET /messages/admin?conversationId=`
+(any transcript) follow the backend's staff RBAC (`worktrees/ADMIN-RBAC-CONTRACT.md`
+§4, §8; `src/middleware/admin.ts`, `src/services/admin-access.ts`). The caller's
+staff roles (`adminroles`, by `users.staff.roleIds`) must grant `chats.read`:
+SUPER_ADMIN, OPERATIONS and MODERATOR do, a custom role does when it is ticked. A
+system role's permissions come from `src/utils/admin-system-roles.ts`, a copy of
+the backend's `system-roles.ts` that must change with it, never from its row.
+
+| Token | `ADMIN_SESSION_ENFORCED=false` | `true` |
+| --- | --- | --- |
+| admin (`aud: "admin"`, password + TOTP): ACTIVE, `sv` = `staff.sessionVersion`, `otp` in `amr` | roles decide | roles decide; MFA must be enrolled |
+| plain `{ userId }` of an ACTIVE member without an authenticator | roles decide | 401 |
+| plain, member has enrolled TOTP / SUSPENDED / INVITED / issued before `staff.sessionsRevokedAt` | 401 | 401 |
+| plain, ADMIN with no staff record | 401 once the backend's bootstrap marker (`adminaccessstate`) exists, which it does since 2026-10-10 | 401 |
+| MFA challenge / enrolment (`sub`, no `userId`), refresh | 401 before any read, as on every route and the socket | same |
+| anyone else | 403 `CHAT-403 Forbidden`, as before | same |
+
+Refusals: 401 `errors.code: ADMIN_SESSION_REQUIRED`; 403 `ADMIN_PERMISSION_REQUIRED`
+with `errors.permission: "chats.read"`; 503 `ADMIN_ACCESS_UNAVAILABLE` when the
+user, roles or marker cannot be read (never a 401 for that). They are REST answers
+only: the socket handshake reads no staff record, so staff accounts keep their
+ordinary chat.
+
+Each allowed request appends one `adminauditlogs` row (`event: "HTTP"`, `permission:
+"chats.read"`, actor, route, status, the conversation as `targetId`, IP, user agent,
+`metadata: { service: "chat", session: "admin" | "legacy" }`) after the response,
+without holding it up; a failed write is logged. The backend owns `adminroles`,
+`adminauditlogs` and `adminaccessstate` and their indexes; this service declares
+none.
+
+Turning enforcement on (contract §9 step 5): once every ACTIVE member has
+`mfaEnabled: true`, set the repository variable `ADMIN_SESSION_ENFORCED=true` (or
+put it in `ENV`) and re-run the latest deploy, together with the backend.
+Rolling back is setting it to `false` again.
 
 ## Read state
 
