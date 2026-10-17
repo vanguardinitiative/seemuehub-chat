@@ -214,6 +214,7 @@ forwarded `true`, which always goes. When a socket disconnects, it sends
 | `MESSAGE_SEND_FAILED` | Storing the message failed (`message` says why), after any [retries](#send-order-and-retries); `_id` echoes the client's id and `conversationId` the payload's (null for a first message sent with `receiverId` only). Nothing was delivered |
 | `RATE_LIMITED` | More than 10 `REACT_MESSAGE` in 10 s from this socket; `messageId` echoes the client's |
 | `ORDER_COMPLETED` | `NEW_MESSAGE` / `NEW_GROUP_MESSAGE` into the chat of an order that is `COMPLETED` (see [Order conversations](#order-conversations)). Checked inside the send's transaction, which is aborted and not retried: nothing was stored, delivered or pushed. `_id` and `conversationId` as for `MESSAGE_SEND_FAILED` |
+| `CHAT_USER_BLOCKED` | `NEW_MESSAGE` into a private one-to-one conversation between a blocked pair, whoever blocked whom (see [User blocks](#user-blocks)). Checked inside the send's transaction, which is aborted and not retried: nothing was stored (not even the conversation a `receiverId` send would have made), delivered or pushed. `_id` and `conversationId` as for `MESSAGE_SEND_FAILED` |
 
 ### Resending a message
 
@@ -312,6 +313,38 @@ code), `setup_user_mismatch` (an authenticated SETUP named another userId),
 refused `REACT_MESSAGE`, with its `code` and `reason`),
 `delivered_write_failed` (a GET's delivered write failed; the GET still
 answered).
+
+## User blocks
+
+A user blocks another in seemuehub-backend (`POST /api/v1/me/blocks`,
+`worktrees/STORE-SAFETY-CONTRACT.md` §2). The backend owns the `userblocks`
+collection (`{ blockerId, blockedId, createdAt }`, its indexes built by its
+index sync); this service reads it, read only (`src/models/user-block.ts`,
+no indexes, never created here), with no HTTP call and no cache. A pair is
+blocked when a row exists in either direction.
+
+Blocks apply to **private one-to-one conversations only**: `conversationType`
+`PRIVATE` (or none), no `orderId`, no `organizationId`, exactly two
+participants (`src/utils/user-blocks.ts`). Order conversations (`ORDER`,
+`orderId`) and company conversations (`organizationId`, which keep
+`candidateBlockedAt`) are not affected.
+
+| Path | Between a blocked pair |
+| --- | --- |
+| `POST /messages` | `403 { success: false, errors: { code: "CHAT_USER_BLOCKED", message } }`, nothing stored |
+| socket `NEW_MESSAGE` | `ERROR { code: "CHAT_USER_BLOCKED", message, event: "NEW_MESSAGE", conversationId, _id }` |
+| `POST /conversations/private` without `orderId` | `403 { code: "CHAT-403", message, errors: { code: "CHAT_USER_BLOCKED", message } }` |
+| `GET /conversations` | the conversation is left out for the one who blocked; the blocked person still sees it |
+| `PUT /message-status/read` | `200`: the reader's own `lastReadAt` moves, but no `readAllAt`, no `READ_MESSAGE` or `DELIVERED` to the other side |
+| `GET /messages`, `GET /conversations` | no delivered mark, no `DELIVERED` |
+| socket `REACT_MESSAGE`, `TYPING`, `DELIVERED` | dropped, no `ERROR` |
+| `POST /agent-messages` | `403 errors.code CHAT_USER_BLOCKED` |
+| pushes | none: nothing above is sent |
+
+Both sides get the same answer, so it never says who blocked whom. Each
+check is one indexed `findOne` on `userblocks` (the list: one `find`);
+`TYPING` and `DELIVERED` keep a socket's answer 5 s. Before the backend
+ships blocks the collection is empty and nothing is refused.
 
 ## Order conversations
 
@@ -452,7 +485,7 @@ room). It is **never pushed**. Each one logs
 | 201 | `{ success: true, data: { message } }`, the stored message, `agent` included |
 | 400 | `{ success: false, errors: { code: "VALIDATION_ERROR", message: "<field> is invalid" } }` |
 | 401 | `{ success: false, code: "CHAT-401", message: "Unauthorized", errors: { code: "UNAUTHORIZED", message } }` |
-| 403 | `errors.code` `NOT_PARTICIPANT`, `ORG_CHAT_BLOCKED`, `ORG_CHAT_DISABLED`, `ORG_CHAT_NOT_MEMBER`, `ORG_CHAT_FORBIDDEN` |
+| 403 | `errors.code` `NOT_PARTICIPANT`, `ORG_CHAT_BLOCKED`, `ORG_CHAT_DISABLED`, `ORG_CHAT_NOT_MEMBER`, `ORG_CHAT_FORBIDDEN`, `CHAT_USER_BLOCKED` (a blocked pair's private conversation) |
 | 404 | `errors.code` `CONVERSATION_NOT_FOUND` |
 | 503 | `errors.code` `ORG_CHAT_UNAVAILABLE` (the backend's authorize could not be asked) |
 
