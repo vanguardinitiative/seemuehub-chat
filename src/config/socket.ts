@@ -7,6 +7,7 @@ import { orgRoomsFor } from "@/services/org-chat";
 import { findReactionTarget, writeReaction } from "@/services/reactions";
 import { pushReaction } from "@/services/chat-push";
 import { writeDelivered } from "@/services/delivered";
+import { blockedInConversation } from "@/services/user-blocks";
 import { registerSocketHandlers } from "@/socket/handlers";
 
 export type { SetupMessage as DataType } from "@/socket/handlers";
@@ -51,6 +52,9 @@ export const setupSocketService = (server: any) => {
     // rooms at SETUP, and TYPING between the candidate and the company.
     orgRoomsFor,
     audienceOf,
+    // User blocks (STORE-SAFETY-CONTRACT.md §2.2): REACT_MESSAGE, TYPING and
+    // DELIVERED in a blocked pair's private conversation are dropped.
+    blockedInConversation,
   });
 
   return io;

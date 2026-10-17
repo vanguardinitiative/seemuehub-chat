@@ -1,4 +1,4 @@
-import { messages } from "@/config";
+import { messages, withErrorCode } from "@/config";
 import { conversationModel, OrderStatus, UserType } from "@/models/conversation";
 import { messageStatusModel } from "@/models/messageStatus";
 import { staffModel } from "@/models/staff";
@@ -9,6 +9,15 @@ import { StaffRole } from "./helper";
 import { participantOf, userIdOf } from "@/utils/conversation-access";
 import { isReadFor, type ReadStateConversation } from "@/utils/read-state";
 import { deliverPage } from "@/services/delivered";
+import { blocksAround, isPairBlocked } from "@/services/user-blocks";
+import { isObjectIdString } from "@/utils/ids";
+import {
+  CHAT_USER_BLOCKED,
+  CHAT_USER_BLOCKED_MESSAGE,
+  blockedConversation,
+  hiddenByBlock,
+  privatePeerOf,
+} from "@/utils/user-blocks";
 
 /**
  * The caller's legacy MessageStatus verdict per message id: true for READ,
@@ -58,6 +67,15 @@ const createPrivateConversation = async (req: Request, res: Response): Promise<v
 
     if (senderId === receiverId) {
       res.status(400).json(messages.SELF_CONVERSATION_NOT_ALLOWED);
+      return;
+    }
+
+    // Opening the pair's private conversation (no orderId; an order's
+    // conversation is never refused): not between a blocked pair, in either
+    // direction, and without saying who blocked whom (STORE-SAFETY-CONTRACT.md
+    // §2.2). One findOne on userblocks.
+    if (!orderId && isObjectIdString(receiverId) && (await isPairBlocked(senderId, receiverId))) {
+      res.status(403).json(withErrorCode({ code: messages.FORBIDDEN.code, message: CHAT_USER_BLOCKED_MESSAGE }, CHAT_USER_BLOCKED));
       return;
     }
     // delay 3 second
@@ -373,8 +391,18 @@ const getAllConversions = async (req: Request, res: Response): Promise<void> => 
       .sort({ updatedAt: -1 })
       .lean<IConversationData[]>();
 
+    // User blocks (STORE-SAFETY-CONTRACT.md §2.2): one find for every block
+    // between the caller and the other people of their private one-to-one
+    // conversations, either direction. A conversation whose other person the
+    // caller blocked is left out; the one who was blocked still sees it.
+    const blocks = await blocksAround(
+      userId,
+      conversations.map((conversation) => privatePeerOf(conversation, userId)).filter((peer): peer is string => Boolean(peer))
+    );
+    const visible = blocks.length > 0 ? conversations.filter((conversation) => !hiddenByBlock(conversation, userId, blocks)) : conversations;
+
     const statusMap = await legacyReadMap(
-      conversations.map((c) => c.latestMessageData?.messageId),
+      visible.map((c) => c.latestMessageData?.messageId),
       userId
     );
 
@@ -382,7 +410,7 @@ const getAllConversions = async (req: Request, res: Response): Promise<void> => 
     // participants[].lastReadAt covers it, or (groups) its MessageStatus row
     // says READ. participants[].lastReadAt and lastDeliveredAt go out as they
     // are (CHAT-CONTRACT.md §1.4, §5.1).
-    const conversationData = conversations.map((conversation) => {
+    const conversationData = visible.map((conversation) => {
       if (conversation.latestMessageData) {
         const messageId = conversation.latestMessageData.messageId;
         conversation.latestMessageData = {
@@ -403,7 +431,11 @@ const getAllConversions = async (req: Request, res: Response): Promise<void> => 
     // the latest message from someone else was not yet (CHAT-CONTRACT.md
     // §5.1). This is how old clients and www, which poll the list, deliver.
     // Never fails the GET; the page shows the new participants[].lastDeliveredAt.
-    await deliverPage(paginatedResults, userId);
+    // Not between a blocked pair: nothing of theirs reaches the other side.
+    await deliverPage(
+      blocks.length > 0 ? paginatedResults.filter((conversation) => !blockedConversation(conversation, userId, blocks)) : paginatedResults,
+      userId
+    );
 
     res.status(200).json({
       code: messages.SUCCESSFULLY.code,

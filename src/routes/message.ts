@@ -14,6 +14,8 @@ import { isObjectIdString } from "@/utils/ids";
 import { isBlocked, organizationOf } from "@/utils/org-chat";
 import { OrgChatRefusal, announceOrgMessage, sendAsOrganization } from "@/services/org-chat";
 import { ORDER_COMPLETED_MESSAGE, isCompletedOrderChat } from "@/utils/order-chat";
+import { CHAT_USER_BLOCKED, CHAT_USER_BLOCKED_MESSAGE } from "@/utils/user-blocks";
+import { isPrivateConversationBlocked } from "@/services/user-blocks";
 const messageRoute: IRouter = Router();
 
 /** POST /messages' refusals: `{ success: false, errors: { code, message } }`, the type and sticker ones with their CHAT-400 fields too. */
@@ -54,7 +56,7 @@ messageRoute.post("/", checkAuthorizationMiddleware, async (req, res) => {
     // used to take any conversation id from any signed-in user.
     const conversation: any = await conversationModel
       .findOne({ _id: conversationId, ...participantOf(actorUserId) })
-      .select("_id organizationId candidateUserId candidateBlockedAt participants orderStatus")
+      .select("_id conversationType orderId organizationId candidateUserId candidateBlockedAt participants orderStatus")
       .lean();
     if (!conversation) return void res.status(404).json(NOT_FOUND);
     // The candidate blocked this company: neither side writes in it again.
@@ -64,6 +66,11 @@ messageRoute.post("/", checkAuthorizationMiddleware, async (req, res) => {
     // (CHAT-CONTRACT.md §1.10). Nothing is stored or announced.
     if (isCompletedOrderChat(conversation))
       return void res.status(403).json(refused("ORDER_COMPLETED", ORDER_COMPLETED_MESSAGE));
+    // A private one-to-one conversation between a blocked pair, whoever
+    // blocked whom (STORE-SAFETY-CONTRACT.md §2.2): nothing is stored,
+    // announced or pushed. The answer does not say who blocked.
+    if (await isPrivateConversationBlocked(conversation, actorUserId))
+      return void res.status(403).json(refused(CHAT_USER_BLOCKED, CHAT_USER_BLOCKED_MESSAGE));
 
     const message = await messageModel.create({
       sender: actorUserId,

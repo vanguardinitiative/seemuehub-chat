@@ -14,6 +14,12 @@ export const TYPING_RULES = {
   minIntervalMs: 1_000,
   /** Conversations a socket keeps state for before the oldest idle ones are forgotten. */
   maxConversations: 100,
+  /**
+   * How long a socket trusts a "blocked pair or not" answer for a private
+   * conversation (STORE-SAFETY-CONTRACT.md §2.2 allows at most 5 s), shared
+   * by TYPING and DELIVERED.
+   */
+  blockTtlMs: 5_000,
 } as const;
 
 /** One socket's TYPING state for one conversation. */
@@ -40,6 +46,12 @@ export interface TypingEntry {
   /** When a TYPING for this conversation was last forwarded, and what it said. */
   lastForwardedAt: number | null;
   typing: boolean;
+  /**
+   * The last user-block lookup for this conversation (socket/handlers.ts
+   * blockedNow): when it started, and its answer (true: a private
+   * conversation between a blocked pair). Kept for TYPING_RULES.blockTtlMs.
+   */
+  blockCheck?: { at: number; blocked: Promise<boolean> };
 }
 
 export const newTypingEntry = (): TypingEntry => ({

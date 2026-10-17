@@ -56,7 +56,8 @@ export type SocketErrorCode =
   | "MESSAGE_SEND_FAILED"
   | "RATE_LIMITED"
   | "ORG_CHAT_BLOCKED"
-  | "ORDER_COMPLETED";
+  | "ORDER_COMPLETED"
+  | "CHAT_USER_BLOCKED";
 
 const ERROR_MESSAGES: Record<SocketErrorCode, string> = {
   AUTH_REQUIRED: "Connect with auth: { token } to use this event",
@@ -67,6 +68,8 @@ const ERROR_MESSAGES: Record<SocketErrorCode, string> = {
   RATE_LIMITED: "Too many events; try again shortly",
   ORG_CHAT_BLOCKED: "This company conversation is blocked; nobody can send in it",
   ORDER_COMPLETED: "This order is completed; its chat no longer takes messages",
+  // The same words whoever blocked whom (STORE-SAFETY-CONTRACT.md §2.2).
+  CHAT_USER_BLOCKED: "You can't message this person",
 };
 
 /** Every refusal goes out as one `ERROR` event of this shape. */

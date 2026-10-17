@@ -11,10 +11,12 @@ import { deliveryMoves, otherParticipants } from "@/utils/delivered";
 import { publishDelivered } from "@/services/delivered";
 import { orgRoomOf } from "@/socket/rooms";
 import { env } from "@/config/env";
+import { isPrivateConversationBlocked } from "@/services/user-blocks";
 
 interface ReadConversation {
   _id: mongoose.Types.ObjectId;
   conversationType?: string;
+  orderId?: unknown;
   organizationId?: unknown;
   participants?: Array<Partial<IParticipant>>;
   latestMessageData?: {
@@ -104,6 +106,12 @@ const updateReadStatus = async (req: Request, res: Response): Promise<void> => {
     const mine = participants.find((participant) => participantIdOf(participant) === readerId);
     const lastReadAt = mine?.lastReadAt ? new Date(mine.lastReadAt) : now;
 
+    // A private conversation between a blocked pair (STORE-SAFETY-CONTRACT.md
+    // §2.2): the reader's own marks above stay, so their unread count is
+    // right, but the read goes no further. No readAllAt (the other side's
+    // ticks), no READ_MESSAGE or DELIVERED to the other side. No error.
+    const blocked = await isPrivateConversationBlocked(before, readerId);
+
     // Group chats keep their per-message receipts; private sends never
     // created any, which is why reads used to go nowhere.
     if (conversation.conversationType === "GROUP") {
@@ -119,7 +127,7 @@ const updateReadStatus = async (req: Request, res: Response): Promise<void> => {
     const latest = conversation.latestMessageData ?? {};
     let readAllAt: Date | null = latest.readAllAt ? new Date(latest.readAllAt) : null;
     let readAllJustSet = false;
-    if (!latest.readAllAt && latest.messageId && allOthersRead(conversation)) {
+    if (!blocked && !latest.readAllAt && latest.messageId && allOthersRead(conversation)) {
       const marked = await conversationModel.updateOne(
         { _id: conversationId, "latestMessageData.messageId": latest.messageId, "latestMessageData.readAllAt": null },
         { $set: { "latestMessageData.readAllAt": now } },
@@ -172,7 +180,7 @@ const updateReadStatus = async (req: Request, res: Response): Promise<void> => {
 
     // This read is also what delivered the latest message from someone else:
     // the other participants hear DELIVERED (CHAT-CONTRACT.md §5.1).
-    if (deliveryMoves(before, readerId, now)) {
+    if (!blocked && deliveryMoves(before, readerId, now)) {
       publishDelivered({ userIds: otherParticipants(before, readerId), conversationId, userId: readerId, deliveredAt: now.toISOString() });
     }
 

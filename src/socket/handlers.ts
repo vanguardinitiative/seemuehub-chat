@@ -30,7 +30,7 @@ import {
 import { idString } from "@/utils/ids";
 import { checkSticker } from "@/utils/sticker";
 import { serialize } from "@/utils/serialize";
-import { makeRoomForTyping, membershipExpired, newTypingEntry, stillTyping, typingPasses, type TypingEntry } from "./typing";
+import { TYPING_RULES, makeRoomForTyping, membershipExpired, newTypingEntry, stillTyping, typingPasses, type TypingEntry } from "./typing";
 
 /**
  * The client-facing socket events. Everything that touches Redis or Mongo
@@ -131,6 +131,13 @@ export interface SocketDeps {
    * Absent: membersOf, participants only, as before company chat.
    */
   audienceOf?: (conversationId: string, userId: string, orgRooms: readonly string[]) => Promise<ConversationAudience | null>;
+  /**
+   * Whether the conversation is a private one-to-one conversation between
+   * `userId` and someone they blocked or who blocked them
+   * (services/user-blocks.ts, STORE-SAFETY-CONTRACT.md §2.2). REACT_MESSAGE,
+   * TYPING and DELIVERED in one are dropped, silently. Absent: no blocks.
+   */
+  blockedInConversation?: (conversationId: string, userId: string) => Promise<boolean>;
   /** The clock for the throttles; Date.now unless a test passes one. */
   now?: () => number;
   /** Timers for DELIVERED's deferred write; setTimeout / clearTimeout unless a test passes its own. */
@@ -486,6 +493,14 @@ const handleReaction = async (socket: Socket, deps: SocketDeps, raw: unknown): P
     refuseReaction("INVALID_PAYLOAD", problem, { field: "messageId" });
     return;
   }
+  // A blocked pair's private conversation (STORE-SAFETY-CONTRACT.md §2.2):
+  // dropped without a word, so neither side learns of the block from it.
+  // Nothing is written, published or pushed. Only a two-person conversation
+  // can be one, so nothing else costs a lookup.
+  if (members.length === 2 && deps.blockedInConversation && (await deps.blockedInConversation(conversationId, actor.userId))) {
+    logEvent({ msg: "reaction_dropped", reason: "CHAT_USER_BLOCKED", socketId: socket.id, userId: actor.userId, messageId: echo });
+    return;
+  }
 
   const at = new Date(now());
   const before = await deps.writeReaction(messageId, actor.userId, emoji, at);
@@ -587,6 +602,34 @@ const memberEntry = async (
 };
 
 /**
+ * Whether the conversation an entry caches is a private one between a blocked
+ * pair (STORE-SAFETY-CONTRACT.md §2.2), for TYPING and DELIVERED, which drop
+ * their events there without a word. Only a participant with exactly one
+ * other participant and no company side can be in one, so nothing else costs
+ * a lookup. The answer is kept TYPING_RULES.blockTtlMs (5 s); events that
+ * arrive meanwhile share it. A lookup that fails drops the event (as a failed
+ * membership lookup does) and is not kept.
+ */
+const blockedNow = (deps: SocketDeps, entry: TypingEntry, event: string, conversationId: string, userId: string): Promise<boolean> | false => {
+  if (!deps.blockedInConversation) return false;
+  if (!entry.member || entry.orgSide || entry.orgRoom || entry.others.length !== 1) return false;
+  const now = (deps.now ?? Date.now)();
+  if (entry.blockCheck && now - entry.blockCheck.at < TYPING_RULES.blockTtlMs) return entry.blockCheck.blocked;
+  const check: { at: number; blocked: Promise<boolean> } = {
+    at: now,
+    blocked: Promise.resolve()
+      .then(() => deps.blockedInConversation!(conversationId, userId))
+      .catch((error) => {
+        console.error("block lookup failed", { event, conversationId, error: error instanceof Error ? error.message : error });
+        if (entry.blockCheck === check) entry.blockCheck = undefined;
+        return true;
+      }),
+  };
+  entry.blockCheck = check;
+  return check.blocked;
+};
+
+/**
  * TYPING { conversationId, typing } (CHAT-CONTRACT.md §4.1): relayed to the
  * conversation's other participants, nothing written anywhere.
  *
@@ -598,6 +641,8 @@ const memberEntry = async (
  *   NOT_PARTICIPANT (that answer is kept for a minute).
  * - At most one forwarded per second per conversation; the rest are dropped
  *   silently, except a `typing: false` after a forwarded `true`.
+ * - None in a private conversation between a blocked pair, silently
+ *   (blockedNow).
  */
 const handleTyping = async (socket: Socket, deps: SocketDeps, raw: unknown): Promise<void> => {
   const event = "TYPING";
@@ -622,6 +667,9 @@ const handleTyping = async (socket: Socket, deps: SocketDeps, raw: unknown): Pro
     refuse(socket, event, "NOT_PARTICIPANT", { conversationId });
     return;
   }
+
+  const blocked = blockedNow(deps, entry, event, conversationId, actor.userId);
+  if (blocked && (await blocked)) return;
 
   // Gone while the lookup ran: its disconnect has already said "stopped".
   if (!socket.connected) return;
@@ -693,6 +741,9 @@ const later = (a: Date | undefined, b: Date): Date => (a && a.getTime() > b.getT
  *
  * When the write moves the mark past the latest message from someone else,
  * DELIVERED goes to the other participants (deliverDelivered).
+ *
+ * In a private conversation between a blocked pair it is dropped, silently:
+ * nothing is written or published (blockedNow).
  */
 const handleDelivered = async (socket: Socket, deps: SocketDeps, raw: unknown): Promise<void> => {
   const event = "DELIVERED";
@@ -716,6 +767,8 @@ const handleDelivered = async (socket: Socket, deps: SocketDeps, raw: unknown): 
     refuse(socket, event, "NOT_PARTICIPANT", { conversationId });
     return;
   }
+  const blocked = blockedNow(deps, entry, event, conversationId, actor.userId);
+  if (blocked && (await blocked)) return;
 
   const states = deliveredStatesOf(socket);
   let state = states.get(conversationId);

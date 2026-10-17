@@ -17,6 +17,7 @@ import { isBlocked } from "@/utils/org-chat";
 import { isCompletedOrderChat } from "@/utils/order-chat";
 import { withSendTransaction } from "@/utils/transaction";
 import { serialize } from "@/utils/serialize";
+import { isPrivateConversationBlocked } from "@/services/user-blocks";
 
 /**
  * Thrown inside the send's transaction when the conversation is a company
@@ -29,6 +30,21 @@ class BlockedConversationError extends Error {
   constructor() {
     super("ORG_CHAT_BLOCKED");
     this.name = "BlockedConversationError";
+  }
+}
+
+/**
+ * Thrown inside the send's transaction when the conversation is a private
+ * one-to-one conversation between a blocked pair, in either direction
+ * (STORE-SAFETY-CONTRACT.md §2.2): the transaction is aborted - a
+ * conversation the send would have created goes too - nothing is published
+ * or pushed, and the sender gets ERROR CHAT_USER_BLOCKED, which does not say
+ * who blocked whom.
+ */
+class UserBlockedError extends Error {
+  constructor() {
+    super("CHAT_USER_BLOCKED");
+    this.name = "UserBlockedError";
   }
 }
 
@@ -276,6 +292,10 @@ const storePrivateMessage = async (socket: Socket, data: MessageData): Promise<v
         // meanwhile is honoured too.
         if (isBlocked(conversationData)) throw new BlockedConversationError();
         refuseCompletedOrderChat(conversationData);
+        // A blocked pair's private conversation, the one a receiverId send
+        // found or created included: one findOne on userblocks, only for a
+        // private one-to-one conversation.
+        if (await isPrivateConversationBlocked(conversationData, String(data.senderId))) throw new UserBlockedError();
         // const messageStatusData = conversationData?.participants
         //   .map((participant: IParticipant) => {
         //     if (participant.user.toString() !== data.senderId) {
@@ -304,6 +324,11 @@ const storePrivateMessage = async (socket: Socket, data: MessageData): Promise<v
     if (error instanceof BlockedConversationError) {
       logEvent({ msg: "message_refused", event: "NEW_MESSAGE", code: "ORG_CHAT_BLOCKED", socketId: socket?.id, conversationId: data?.conversationId ?? null });
       refuse(socket, "NEW_MESSAGE", "ORG_CHAT_BLOCKED", { conversationId: data?.conversationId ?? null, _id: data?._id ?? null });
+      return;
+    }
+    if (error instanceof UserBlockedError) {
+      logEvent({ msg: "message_refused", event: "NEW_MESSAGE", code: "CHAT_USER_BLOCKED", socketId: socket?.id, userId: data?.senderId ? String(data.senderId) : null, conversationId: data?.conversationId ?? null });
+      refuse(socket, "NEW_MESSAGE", "CHAT_USER_BLOCKED", { conversationId: data?.conversationId ?? null, _id: data?._id ?? null });
       return;
     }
     if (error instanceof OrderCompletedError) return refuseOrderCompleted(socket, "NEW_MESSAGE", data, error);
