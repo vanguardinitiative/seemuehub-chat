@@ -24,6 +24,7 @@ const sift = siftModule.default ?? siftModule;
 
 const { conversationModel } = require("../../dist/models/conversation.js");
 const { messageModel } = require("../../dist/models/message.js");
+const { userBlockModel } = require("../../dist/models/user-block.js");
 
 const oid = () => new Types.ObjectId().toString();
 
@@ -128,13 +129,15 @@ const chain = (run, calls) => {
 const duplicateKey = (keyPattern) => Object.assign(new Error("E11000 duplicate key error"), { code: 11000, keyPattern });
 
 /**
- * Installs both collections. `seed` is { conversations, messages } as plain
- * rows. Returns the live rows, the calls, and `restore`.
+ * Installs the collections. `seed` is { conversations, messages, userblocks }
+ * as plain rows (`userblocks` is the backend's, read only here:
+ * { blockerId, blockedId }). Returns the live rows, the calls, and `restore`.
  */
 const installStore = (seed = {}) => {
   const db = {
     conversations: (seed.conversations ?? []).map((row) => plain(row)),
     messages: (seed.messages ?? []).map((row) => plain(row)),
+    userblocks: (seed.userblocks ?? []).map((row) => plain(row)),
   };
   const calls = { populate: [], writes: [] };
 
@@ -219,6 +222,7 @@ const installStore = (seed = {}) => {
       },
     }),
     ...collection("messages", messageModel),
+    ...collection("userblocks", userBlockModel),
     stub(conversationModel.prototype, "save", async () => assert.fail("a conversation must never be .save()d (CHAT-CONTRACT.md §1.1)")),
   ];
 

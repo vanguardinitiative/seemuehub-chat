@@ -7,6 +7,7 @@
  *   records what would have been published.
  * - Turns off mongoose's command buffering, so a query nobody stubbed fails at
  *   once instead of hanging the test for ten seconds.
+ * - Makes the backend's `userblocks` read as empty (below).
  *
  * Require this before any dist/ module. Not a test file (node --test only
  * picks up *.test.js here).
@@ -73,5 +74,16 @@ const query = (result) => {
   };
   return chain;
 };
+
+/**
+ * seemuehub-backend's `userblocks` (dist/models/user-block.js), which this
+ * service only reads: offline it is empty, as it is in production until the
+ * backend ships its blocks. A test that needs blocks seeds them
+ * (org-chat-fakes installStore `userblocks`) or stubs the model; restoring
+ * either brings this back.
+ */
+const { userBlockModel } = require("../../dist/models/user-block.js");
+userBlockModel.findOne = () => query(null);
+userBlockModel.find = () => query([]);
 
 module.exports = { published, cached, stub, query };

@@ -3,6 +3,7 @@ import { conversationModel } from "@/models/conversation";
 import { pub } from "@/config/redis";
 import { logEvent } from "@/socket/auth";
 import { participantOf } from "@/utils/conversation-access";
+import { isPrivateConversationBlocked } from "@/services/user-blocks";
 import {
   deliveryMoves,
   needsDelivery,
@@ -20,8 +21,12 @@ import {
  * (controllers/messageStatus).
  */
 
-/** The fields a delivery decision reads. */
-export const DELIVERY_FIELDS = "participants.user participants.lastDeliveredAt latestMessageData.senderId latestMessageData.sendAt";
+/**
+ * The fields a delivery decision reads, and what tells a private one-to-one
+ * conversation from an order's or a company's (utils/user-blocks.ts).
+ */
+export const DELIVERY_FIELDS =
+  "conversationType orderId organizationId participants.user participants.lastDeliveredAt latestMessageData.senderId latestMessageData.sendAt";
 
 const deliveredUpdate = (at: Date) => ({ $max: { "participants.$[me].lastDeliveredAt": at } });
 const deliveredOptions = (userId: string) => ({
@@ -37,7 +42,8 @@ export const publishDelivered = (notice: DeliveredNotice): void => {
 
 /**
  * GET /conversations: the caller has received every conversation on the page
- * it is about to be sent. One updateMany for those with something to
+ * it is about to be sent (the list leaves out a blocked pair's private
+ * conversations before it calls this). One updateMany for those with something to
  * deliver (none: no write at all), then DELIVERED for each, and the page's
  * copies show the new mark. Never throws: a failed write is logged and the
  * GET goes on.
@@ -74,7 +80,9 @@ export const deliverPage = async (
 
 /**
  * GET /messages?conversationId=: the same for that one conversation, read
- * with DELIVERY_FIELDS by the membership check. Never throws.
+ * with DELIVERY_FIELDS by the membership check. Never throws. Nothing between
+ * a blocked pair (STORE-SAFETY-CONTRACT.md §2.2): their private conversation
+ * records no delivery and tells nobody.
  */
 export const deliverConversation = async (
   conversation: DeliveredConversation,
@@ -83,6 +91,7 @@ export const deliverConversation = async (
 ): Promise<void> => {
   try {
     if (!needsDelivery(conversation, userId)) return;
+    if (await isPrivateConversationBlocked(conversation, userId)) return;
     await conversationModel.updateOne(
       { _id: conversation._id, ...participantOf(userId) },
       deliveredUpdate(now),

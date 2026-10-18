@@ -8,6 +8,8 @@ import { logEvent } from "@/socket/auth";
 import { parseAgentMessageBody } from "@/utils/agent-message";
 import { idString } from "@/utils/ids";
 import { isBlocked, orgChatError, organizationFields, organizationOf } from "@/utils/org-chat";
+import { CHAT_USER_BLOCKED, CHAT_USER_BLOCKED_MESSAGE } from "@/utils/user-blocks";
+import { isPrivateConversationBlocked } from "@/services/user-blocks";
 
 /**
  * Seemue AI cards in a chat (worktrees/AGENT-CONTRACT.md §8): POST
@@ -27,7 +29,9 @@ import { isBlocked, orgChatError, organizationFields, organizationOf } from "@/u
  *   routes use); their message carries `sendAsOrganizationId`, as a company
  *   message does. Needs ORG_CHAT_ENABLED, like every new company route.
  *
- * Nobody posts into a company conversation the candidate has blocked.
+ * Nobody posts into a company conversation the candidate has blocked, nor
+ * into a private one-to-one conversation between a blocked pair
+ * (STORE-SAFETY-CONTRACT.md §2.2): 403 CHAT_USER_BLOCKED.
  */
 
 /** A refusal the route answers as it is: an HTTP status and a code. */
@@ -53,10 +57,12 @@ const notFound = () => new AgentMessageRefusal(404, "CONVERSATION_NOT_FOUND", "C
 const blockedForCandidate = () => new AgentMessageRefusal(403, "ORG_CHAT_BLOCKED", "ທ່ານໄດ້ບລັອກບໍລິສັດນີ້ແລ້ວ");
 
 /** What the checks and the fan-out read of the conversation. */
-const CONVERSATION_FIELDS = "_id conversationType participants organizationId candidateUserId candidateBlockedAt";
+const CONVERSATION_FIELDS = "_id conversationType orderId participants organizationId candidateUserId candidateBlockedAt";
 
 type ConversationRow = {
   _id: unknown;
+  conversationType?: unknown;
+  orderId?: unknown;
   participants?: { user?: unknown }[] | null;
   organizationId?: unknown;
   candidateUserId?: unknown;
@@ -73,6 +79,8 @@ const isParticipantOf = (conversation: ConversationRow, userId: string): boolean
 const accessFor = async (conversation: ConversationRow, requestedBy: string): Promise<Access> => {
   if (isParticipantOf(conversation, requestedBy)) {
     if (isBlocked(conversation)) throw blockedForCandidate();
+    if (await isPrivateConversationBlocked(conversation, requestedBy))
+      throw new AgentMessageRefusal(403, CHAT_USER_BLOCKED, CHAT_USER_BLOCKED_MESSAGE);
     return { asOrganizationId: null, organization: null };
   }
 
