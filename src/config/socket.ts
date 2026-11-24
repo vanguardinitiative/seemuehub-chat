@@ -9,6 +9,7 @@ import { pushReaction } from "@/services/chat-push";
 import { writeDelivered } from "@/services/delivered";
 import { blockedInConversation } from "@/services/user-blocks";
 import { registerSocketHandlers } from "@/socket/handlers";
+import { logSocketAuthMode } from "@/socket/auth";
 
 export type { SetupMessage as DataType } from "@/socket/handlers";
 
@@ -31,7 +32,8 @@ export const setupSocketService = (server: any) => {
   // Try to subscribe immediately (in case Redis is already connected)
   subscribeToClient(io);
 
-  console.log(`Socket auth mode: ${env.SOCKET_AUTH_MODE}`);
+  // Also an error line in production while the opt-in permissive mode is on.
+  logSocketAuthMode(env.SOCKET_AUTH_MODE, process.env.NODE_ENV);
 
   // Handshake auth, SETUP, NEW_MESSAGE, NEW_GROUP_MESSAGE, REACT_MESSAGE,
   // TYPING, DELIVERED and disconnect: see src/socket/handlers.ts.

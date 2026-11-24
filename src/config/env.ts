@@ -16,9 +16,10 @@ const envSchema = z.object({
   // Socket Configuration
   SOCKET_CORS_ORIGIN: z.string().default("http://localhost:5173"),
 
-  // Shared with seemuehub-backend, both ways. When set, the backend-only
-  // routes (/orders, /core-socket/*) require it as X-Internal-Key, and it is
-  // sent as X-Internal-Key on the push requests to BACKEND_URL.
+  // Shared with seemuehub-backend, both ways. The backend-only routes
+  // (/orders, /core-socket/*, /agent-messages) require it as X-Internal-Key
+  // and refuse everyone while it is unset, and it is sent as X-Internal-Key on
+  // the push requests to BACKEND_URL.
   CHAT_INTERNAL_KEY: z.string().optional(),
 
   // seemuehub-backend's origin, e.g. https://api.seemuehub.com (no /api/v1).
@@ -31,12 +32,14 @@ const envSchema = z.object({
   ),
 
   // What a socket that connects without `auth: { token }` may do (see
-  // src/socket/auth.ts and the README). "permissive" keeps the old behaviour
-  // and logs `legacy_socket`; "enforce" refuses SETUP and message sends.
-  // A value that is neither stops the service at boot rather than guessing.
+  // src/socket/auth.ts and the README). "enforce" (the default) refuses its
+  // SETUP and message sends. "permissive" is an explicit opt-in that trusts
+  // the userId/senderId such a socket claims and logs `legacy_socket`; in
+  // production it is logged as an error at boot (logSocketAuthMode). A value
+  // that is neither stops the service at boot rather than guessing.
   SOCKET_AUTH_MODE: z.preprocess(
     (value) => (typeof value === "string" && value.trim() !== "" ? value.trim().toLowerCase() : undefined),
-    z.enum(["permissive", "enforce"]).default("permissive")
+    z.enum(["permissive", "enforce"]).default("enforce")
   ),
 
   // Where sticker images live. A STICKER message's one attachment must point

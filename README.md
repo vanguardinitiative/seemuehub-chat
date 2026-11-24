@@ -28,8 +28,8 @@ The tests need neither Mongo nor Redis.
 | `MONGODB_URI` | yes | Shared database with seemuehub-backend |
 | `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD` | yes | Pub/sub between instances |
 | `JWT_SECRET_KEY` | yes | The backend's `JWT_SECRET`; verifies access tokens for REST and sockets |
-| `CHAT_INTERNAL_KEY` | recommended | Shared with seemuehub-backend. When set, the backend-only routes (`POST /orders`, `POST /core-socket/payment`) require it as `X-Internal-Key`; `POST /agent-messages` requires it always and refuses everyone while it is unset. See [Internal routes](#internal-routes-and-chat_internal_key) |
-| `SOCKET_AUTH_MODE` | no (`permissive`) | `permissive` or `enforce`; see below. Any other value stops the service at boot |
+| `CHAT_INTERNAL_KEY` | yes, for the backend's calls | Shared with seemuehub-backend. The backend-only routes (`POST /orders`, `POST /core-socket/payment`, `POST /agent-messages`) require it as `X-Internal-Key`, and refuse everyone while it is unset. See [Internal routes](#internal-routes-and-chat_internal_key) |
+| `SOCKET_AUTH_MODE` | no (`enforce`) | `enforce` or `permissive` (an opt-in, logged as an error at boot in production); see below. Any other value stops the service at boot |
 | `BACKEND_URL` | no | seemuehub-backend's origin (`https://api.seemuehub.com`, no `/api/v1`). With `CHAT_INTERNAL_KEY`, new private messages are pushed through it; see [Push notifications](#push-notifications). Not a URL: the service stops at boot |
 | `STICKER_URL_PREFIX` | no (`https://seemuehub-storage.s3.ap-southeast-1.amazonaws.com/images/`) | Where sticker images live; a `STICKER` message's attachment must start with it (see [Stickers](#stickers)). Only needs setting if the bucket moves. Not an https URL ending in `/`: the service stops at boot |
 | `ORG_CHAT_ENABLED` | no (`false`) | `true` turns on company ↔ candidate chat (see [Company conversations](#company-conversations)); needs `BACKEND_URL`, `CHAT_INTERNAL_KEY` and the backend's own `ORG_CHAT_ENABLED` |
@@ -210,7 +210,7 @@ forwarded `true`, which always goes. When a socket disconnects, it sends
 | `AUTH_REQUIRED` | Legacy socket in `enforce` mode, or any legacy socket sending `REACT_MESSAGE`, `TYPING` or `DELIVERED`: reconnect with `auth: { token }` |
 | `TOKEN_EXPIRED` | The connection's token has expired since it connected: refresh, reconnect, retry |
 | `NOT_PARTICIPANT` | Not a participant of `conversationId` (or, for `REACT_MESSAGE`, of the message's conversation); nothing was stored, joined or sent |
-| `INVALID_PAYLOAD` | The payload was not an object, or (`field: "messageType"`) its `messageType` is missing or not one a client may send, or (`field: "attachments"`) a `STICKER` failed the [sticker check](#stickers); `_id` echoes the client's id |
+| `INVALID_PAYLOAD` | The payload was not an object, or (`field: "messageType"`) its `messageType` is missing or not one a client may send, or (`field: "attachments"`) a `STICKER` failed the [sticker check](#stickers), or (`field: "senderId"`, legacy socket in `permissive` mode) its `senderId` is not a user id; `_id` echoes the client's id |
 | `MESSAGE_SEND_FAILED` | Storing the message failed (`message` says why), after any [retries](#send-order-and-retries); `_id` echoes the client's id and `conversationId` the payload's (null for a first message sent with `receiverId` only). Nothing was delivered |
 | `RATE_LIMITED` | More than 10 `REACT_MESSAGE` in 10 s from this socket; `messageId` echoes the client's |
 | `ORDER_COMPLETED` | `NEW_MESSAGE` / `NEW_GROUP_MESSAGE` into the chat of an order that is `COMPLETED` (see [Order conversations](#order-conversations)). Checked inside the send's transaction, which is aborted and not retried: nothing was stored, delivered or pushed. `_id` and `conversationId` as for `MESSAGE_SEND_FAILED` |
@@ -257,8 +257,19 @@ of a WriteConflict with `MESSAGE_SEND_FAILED`. Now
 
 What a legacy (tokenless) socket may do:
 
-- `permissive` (default): everything it always could, trusting the `userId` /
-  `senderId` in its payloads. Each event is logged as one JSON line:
+- `enforce` (default): it may connect and stay connected, but `SETUP`,
+  `NEW_MESSAGE` and `NEW_GROUP_MESSAGE` are answered with `ERROR`
+  `AUTH_REQUIRED` (logged as `legacy_socket` with `"action":"refused"`), and
+  anonymous donations are not broadcast (below).
+- `permissive` (opt-in, only by setting it): `SETUP` and sends as the
+  `userId` / `senderId` its payloads claim. Even so, the conversation room
+  `SETUP` names is joined, and a message into an existing conversation (every
+  group message) is sent, only when that user is one of its participants
+  (`ERROR` `NOT_PARTICIPANT` otherwise), and a `senderId` that is not a user
+  id is `INVALID_PAYLOAD`. A tokenless socket can still claim to be any user,
+  so in production (`NODE_ENV` `production`, any case) the boot logs an error
+  line `{"msg":"socket_auth_permissive",...}`. Each event is logged as one
+  JSON line:
 
   ```json
   {"msg":"legacy_socket","event":"SETUP","mode":"permissive","action":"allowed","socketId":"…","claimedUserId":"…","origin":"https://www.seemuehub.com"}
@@ -272,22 +283,14 @@ What a legacy (tokenless) socket may do:
   `claimedUserId` is null for a signed-out visitor (the donate page), so count
   distinct non-null `claimedUserId` on `SETUP` lines to measure the signed-in
   clients still on the old protocol.
-- `enforce`: a legacy socket may connect and stay connected, but `SETUP`,
-  `NEW_MESSAGE` and `NEW_GROUP_MESSAGE` are answered with `ERROR`
-  `AUTH_REQUIRED` (still logged, with `"action":"refused"`), and anonymous
-  donations are no longer broadcast (below).
 
-Rollout:
+Every client that opens a socket to this service sends its token: the web
+(www and the web-classic rollback) and the Seemuehub app. Admin, the
+organization portal and the Seemuebiz app open none. The one tokenless socket
+left is the signed-out donate page, which only listens.
 
-1. Deploy with `SOCKET_AUTH_MODE` unset (`permissive`). Nothing changes for
-   existing clients; authenticated clients get the new behaviour.
-2. Ship the web and mobile clients that connect with `auth: { token }`.
-3. Watch `legacy_socket` lines for about 7 days
-   (`docker logs seemuehub-chat 2>&1 | grep '"msg":"legacy_socket"'`) until
-   signed-in `SETUP`s without a token have stopped.
-4. Add `SOCKET_AUTH_MODE=enforce` to the `ENV` secret and redeploy.
-
-Rolling back is setting it back to `permissive` (or removing it).
+Rolling back is adding `SOCKET_AUTH_MODE=permissive` to the `ENV` secret and
+redeploying; take it out again as soon as the cause is fixed.
 
 ### Payments and anonymous donations
 
@@ -297,8 +300,9 @@ Rolling back is setting it back to `permissive` (or removing it).
 the result on `referenceId`, the Donate document's ObjectId. That id is not a
 secret (ObjectIds are a timestamp and a counter, and the broadcast hands every
 one to every socket), so the trimmed `{ type, referenceId, status }` broadcast
-for donations only happens in `permissive` mode. In `enforce` mode a donation
-reaches its donor's room if the donor was signed in, and nobody otherwise.
+for donations only happens in `permissive` mode. In `enforce` mode (the
+default) a donation reaches its donor's room if the donor was signed in, and
+nobody otherwise.
 Keeping live confirmation for anonymous donors needs an unguessable per-donation
 key from the backend (see the PR that introduced this).
 
@@ -369,7 +373,13 @@ still arrive: the backend's order steps (`POST /orders`) and Seemue AI's
   `POST /conversations/private` with `{ receiverId, orderId }`, `receiverId`
   being the other party. It answers `201` with the existing conversation
   whatever the order's status, or `data: null` while the backend has not
-  created it yet. It never creates one.
+  created it yet. It never creates one. `receiverId` and `orderId` must be
+  ObjectId strings (and `senderId`, which is ignored, a string): anything
+  else, an object such as `{"$ne": null}` included, is `400 CHAT-400`.
+- `POST /conversations/group` (the support group) takes a token like every
+  other route, uses the token's user as the sender, and answers participants
+  with `userName`, `displayName` and `profileImage` only. `platform` and an
+  ignored `senderId` must be strings.
 - The daily cron (`src/services/cron.ts`, 02:00) marks a conversation still
   `PENDING` 30 days after it was created `CANCELLED` and inactive. It only
   relabels the conversation (not the order in the backend), and the chat
@@ -512,26 +522,17 @@ Three routes are for seemuehub-backend only:
 
 All three require the shared `CHAT_INTERNAL_KEY` as `X-Internal-Key`
 (`src/middleware/internal-key.ts`, compared timing-safe). A missing or wrong
-key is a 401 and logs `{"msg":"internal_key_refused",...}`. While the key is
-**not set here**, `/orders` and `/core-socket/payment` stay open as they
-always were and every call logs `{"msg":"internal_key_unset",...}`: that is
-what lets this deploy before the backend sends the header.
-`/agent-messages` is new, so it never was open: with no key it refuses every
-call (`internal_key_unset` with `"action":"refused"`).
+key is a 401 and logs `{"msg":"internal_key_refused",...}`. All three fail
+closed: while the key is **not set here** they refuse every call (401,
+`{"msg":"internal_key_unset","action":"refused",...}`). `/orders` and
+`/core-socket/payment` used to stay open until the key was set, so a deploy
+that lost it opened them to anyone.
 
-Rollout:
-
-1. Deploy the backend change that sends `X-Internal-Key` on every call to this
-   service (seemuehub-backend#37). With no key configured it sends nothing.
-2. Deploy this. Nothing changes yet; `internal_key_unset` lines show the calls.
-3. Put a long random `CHAT_INTERNAL_KEY` in the **backend's** `ENV` secret and
-   redeploy it. (Before this step, setting the key here would refuse the
-   backend.)
-4. Put the same value in **this service's** `ENV` secret and re-run the latest
-   deploy. From now on both routes are closed to everyone but the backend.
-
-Rolling back is removing the key here (step 4). That also closes
-`/agent-messages` until the key is back.
+The key reaches the service through the `CHAT_INTERNAL_KEY` repository secret
+(the deploy appends it to `.env`), and the backend sends the same value from
+its own `ENV`. A missing or different key on either side stops order step
+messages, payment confirmations and Seemue AI cards until both match again;
+`internal_key_unset` / `internal_key_refused` lines show which.
 
 ## Admin oversight
 

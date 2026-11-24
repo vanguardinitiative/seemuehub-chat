@@ -11,11 +11,10 @@ const refused = (code: string, message: string) => ({ success: false, errors: { 
 
 // seemuehub-backend only: a Seemue AI card posted into a chat on a
 // participant's request (AGENT-CONTRACT.md §8.2, src/services/agent-messages.ts).
-// Fail closed: with no CHAT_INTERNAL_KEY configured, nobody gets in.
+// With no CHAT_INTERNAL_KEY configured, nobody gets in (requireInternalKey).
 agentMessageRoute.post(
   "/",
   requireInternalKey(() => env.CHAT_INTERNAL_KEY, {
-    failClosed: true,
     body: { success: false, ...withErrorCode(messages.UNAUTHORIZED, "UNAUTHORIZED") },
   }),
   async (req, res) => {

@@ -9,6 +9,7 @@ import { pushChatMessage } from "@/services/chat-push";
 import { messages } from "@/config";
 import { messageStatusModel } from "@/models/messageStatus";
 import { participantOf, userIdOf } from "@/utils/conversation-access";
+import { isObjectIdString } from "@/utils/ids";
 import { DELIVERY_FIELDS, deliverConversation } from "@/services/delivered";
 import type { DeliveredConversation } from "@/utils/delivered";
 import { logEvent, refuse } from "@/socket/auth";
@@ -495,6 +496,12 @@ const getAllMessageHistory = async (req: Request, res: Response): Promise<void> 
     }
     if (!orderId) {
       res.status(400).json(messages.CONVERSATION_ID_REQUIRED);
+      return;
+    }
+    // One id string only: `?orderId=a&orderId=b` arrives as an array, which
+    // Mongo would read as $in.
+    if (!isObjectIdString(orderId)) {
+      res.status(400).json(messages.BAD_REQUEST);
       return;
     }
 

@@ -69,14 +69,21 @@ test("POST /orders publishes ORDER with the conversation's fresh latestMessageDa
   app.use("/v1/api", router);
   const server = await new Promise((resolve) => { const s = app.listen(0, () => resolve(s)); });
   const { port } = server.address();
+  // The route refuses everyone without a configured key; the test is the backend.
+  const KEY = "test-order-step-key";
   const previousKey = env.CHAT_INTERNAL_KEY;
-  env.CHAT_INTERNAL_KEY = undefined;
+  env.CHAT_INTERNAL_KEY = KEY;
 
   const post = (body) =>
     new Promise((resolve) => {
       const payload = JSON.stringify(body);
       const req = http.request(
-        { port, path: "/v1/api/orders", method: "POST", headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(payload) } },
+        {
+          port,
+          path: "/v1/api/orders",
+          method: "POST",
+          headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(payload), "X-Internal-Key": KEY },
+        },
         (res) => {
           let text = "";
           res.on("data", (chunk) => (text += chunk));

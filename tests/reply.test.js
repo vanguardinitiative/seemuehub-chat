@@ -364,9 +364,11 @@ test("NEW_MESSAGE over the socket: replyPreview and reactions are stripped, repl
     assert.ok(!("replyPreview" in data));
     assert.ok(!("reactions" in data));
 
-    // A legacy socket too.
+    // A legacy socket too, sending as a member of the group (permissive mode).
     const legacy = await harness.connected(server.client(undefined));
-    legacy.emit("NEW_GROUP_MESSAGE", { messageType: "TEXT", content: "hi", senderId: oid(), conversationId: oid(), replyPreview: {}, reactions: [] });
+    const [legacySender, groupId] = [oid(), oid()];
+    server.setMembers(groupId, [legacySender]);
+    legacy.emit("NEW_GROUP_MESSAGE", { messageType: "TEXT", content: "hi", senderId: legacySender, conversationId: groupId, replyPreview: {}, reactions: [] });
     await harness.until(() => server.calls.group.length === 1);
     assert.ok(!("replyPreview" in server.calls.group[0]));
     assert.ok(!("reactions" in server.calls.group[0]));

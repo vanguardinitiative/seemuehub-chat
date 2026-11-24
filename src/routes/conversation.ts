@@ -16,11 +16,12 @@ const conversationRoute: IRouter = Router();
 // internet could read a conversation — and the populate on `/:id` hands back
 // both participants' fullName, phone and email.
 //
-// `/group` is deliberately left alone: it creates the support group and fans out
-// to staff rows with TAXI_*/EXPRESS_* roles, i.e. it belongs to the other
-// product that shares this service, whose clients we cannot see.
+// `/group` creates the support group and fans out to staff rows with
+// TAXI_*/EXPRESS_* roles; no Seemuehub client calls it. It was open too, and
+// took its sender from the body as given, so it now needs a token like the
+// rest and takes the sender from it.
 conversationRoute.post("/private", checkAuthorizationMiddleware, createPrivateConversation);
-conversationRoute.post("/group", createGroupConversation);
+conversationRoute.post("/group", checkAuthorizationMiddleware, createGroupConversation);
 // Registered before "/:id" so "admin" is not swallowed as a conversation id.
 conversationRoute.get("/admin", checkAuthorizationMiddleware, requireAdminMiddleware, getAllConversationsAdmin);
 conversationRoute.get("/:id", checkAuthorizationMiddleware, getConversation);

@@ -3,7 +3,7 @@
  * no Redis and no Mongo (tests/helpers/offline.js): npm test
  *
  * - POST /orders and POST /core-socket/payment are seemuehub-backend's; they
- *   require X-Internal-Key once CHAT_INTERNAL_KEY is set.
+ *   require X-Internal-Key, and refuse everyone while CHAT_INTERNAL_KEY is unset.
  * - PUT /message-status/read is for the conversation's participants only
  *   (the read itself: read-state.test.js).
  * - SYSTEM and ORDER_* are the service's own message types; REST refuses them.
@@ -134,20 +134,34 @@ for (const route of INTERNAL) {
     restore();
   });
 
-  test(`POST ${route.url} while CHAT_INTERNAL_KEY is unset keeps today's behaviour, with a warning`, async () => {
-    const restore = withKey(undefined);
-    const server = await listen();
-    published.length = 0;
-    warnings.length = 0;
+  // Fail closed: a deploy that loses the key must not open the route to
+  // everyone. It used to let every call through while the key was unset.
+  for (const unset of [undefined, ""]) {
+    test(`POST ${route.url} while CHAT_INTERNAL_KEY is ${JSON.stringify(unset) ?? "undefined"}: 401 for everyone, nothing published`, async () => {
+      const restore = withKey(unset);
+      const server = await listen();
+      const { port } = server.address();
+      published.length = 0;
+      warnings.length = 0;
 
-    const res = await request(server.address().port, "POST", route.url, { body: route.body() });
-    assert.strictEqual(res.status, 200);
-    assert.deepStrictEqual(published.map((p) => p.channel), [route.channel]);
-    assert.deepStrictEqual(warnings, [{ msg: "internal_key_unset", path: route.url, action: "allowed" }]);
-
-    server.close();
-    restore();
-  });
+      try {
+        const bare = await request(port, "POST", route.url, { body: route.body() });
+        assert.strictEqual(bare.status, 401);
+        assert.strictEqual(bare.body.code, "CHAT-401");
+        // Not even a caller that sends some key gets in while none is configured.
+        const guessed = await request(port, "POST", route.url, { headers: { "X-Internal-Key": "anything" }, body: route.body() });
+        assert.strictEqual(guessed.status, 401);
+        assert.deepStrictEqual(published, []);
+        assert.deepStrictEqual(warnings, [
+          { msg: "internal_key_unset", path: route.url, action: "refused" },
+          { msg: "internal_key_unset", path: route.url, action: "refused" },
+        ]);
+      } finally {
+        server.close();
+        restore();
+      }
+    });
+  }
 }
 
 test("internalKeyMatches", async (t) => {
