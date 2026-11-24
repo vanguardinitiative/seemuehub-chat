@@ -633,18 +633,18 @@ test("SOCKET_AUTH_MODE defaults to enforce; permissive is an opt-in that is an e
     return lines;
   };
 
-  for (const nodeEnv of ["production", "PRODUCTION"]) {
-    await t.test(`permissive with NODE_ENV=${nodeEnv} logs an error at boot`, () => {
-      const lines = capture(() => logSocketAuthMode("permissive", nodeEnv));
+  for (const source of [{ NODE_ENV: "production" }, { NODE_ENV: "PRODUCTION" }, { NODE_ENV: "DEVELOPMENT", DEPLOY_ENV: "production" }]) {
+    await t.test(`permissive with ${JSON.stringify(source)} logs an error at boot`, () => {
+      const lines = capture(() => logSocketAuthMode("permissive", source));
       assert.strictEqual(lines.error.length, 1);
       assert.match(lines.error[0], /socket_auth_permissive/);
     });
   }
 
   await t.test("enforce in production, or permissive outside it, is no error", () => {
-    assert.deepStrictEqual(capture(() => logSocketAuthMode("enforce", "production")).error, []);
-    assert.deepStrictEqual(capture(() => logSocketAuthMode("permissive", "DEVELOPMENT")).error, []);
-    assert.deepStrictEqual(capture(() => logSocketAuthMode("permissive", undefined)).error, []);
+    assert.deepStrictEqual(capture(() => logSocketAuthMode("enforce", { NODE_ENV: "production" })).error, []);
+    assert.deepStrictEqual(capture(() => logSocketAuthMode("permissive", { NODE_ENV: "DEVELOPMENT" })).error, []);
+    assert.deepStrictEqual(capture(() => logSocketAuthMode("permissive", {})).error, []);
   });
 });
 

@@ -575,7 +575,7 @@ the backend's `system-roles.ts` that must change with it, never from its row.
 | admin (`aud: "admin"`, password + TOTP): ACTIVE, `sv` = `staff.sessionVersion`, `otp` in `amr` | roles decide | roles decide; MFA must be enrolled |
 | plain `{ userId }` of an ACTIVE member without an authenticator | roles decide | 401 |
 | plain, member has enrolled TOTP / SUSPENDED / INVITED / issued before `staff.sessionsRevokedAt` | 401 | 401 |
-| plain, ADMIN with no staff record | 401 once the backend's bootstrap marker (`adminaccessstate`) exists, which it does since 2026-10-10 | 401 |
+| plain, ADMIN with no staff record | 401 in production (`NODE_ENV` or `DEPLOY_ENV` `production`), marker or not, as in the backend; elsewhere 401 once the backend's bootstrap marker (`adminaccessstate`) exists, which it does in production since 2026-10-10 | 401 |
 | MFA challenge / enrolment (`sub`, no `userId`), refresh | 401 before any read, as on every route and the socket | same |
 | anyone else | 403 `CHAT-403 Forbidden`, as before | same |
 
@@ -593,9 +593,11 @@ without holding it up; a failed write is logged. The backend owns `adminroles`,
 none.
 
 Turning enforcement on (contract §9 step 5): once every ACTIVE member has
-`mfaEnabled: true`, set the repository variable `ADMIN_SESSION_ENFORCED=true` (or
-put it in `ENV`) and re-run the latest deploy, together with the backend.
-Rolling back is setting it to `false` again.
+`mfaEnabled: true` (the backend's `staff:bootstrap` dry run lists the ones who
+do not), set the repository variable `ADMIN_SESSION_ENFORCED=true` (or put it
+in `ENV`) and re-run the latest deploy, together with the backend. Until then a
+plain sign-in (no TOTP) of an unenrolled member still reads chats with that
+member's own roles. Rolling back is setting it to `false` again.
 
 ## Read state
 

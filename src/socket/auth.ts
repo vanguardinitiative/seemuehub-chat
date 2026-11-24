@@ -1,5 +1,6 @@
 import type { Socket } from "socket.io";
 import { AccessTokenError, verifyAccessToken } from "@/utils/access-token";
+import { isProductionDeployment } from "@/utils/deployment";
 import type { TypingEntry } from "./typing";
 
 /**
@@ -200,18 +201,19 @@ export const verifiedActorFor = (
   return actor && actor.kind === "verified" ? actor : null;
 };
 
-const isProduction = (nodeEnv: string | undefined): boolean => (nodeEnv ?? "").trim().toLowerCase() === "production";
-
 /**
  * The boot line for SOCKET_AUTH_MODE. permissive lets a tokenless socket act
- * as whichever user it names, so in production (NODE_ENV production in any
- * case: the image sets `production`, `npm run start:prod` sets `PRODUCTION`)
- * it is also logged as an error, `socket_auth_permissive`. The service still
- * starts: setting it is a deliberate, temporary rollback.
+ * as whichever user it names, so in production (utils/deployment.ts: NODE_ENV
+ * or DEPLOY_ENV "production", any case) it is also logged as an error,
+ * `socket_auth_permissive`. The service still starts: setting it is a
+ * deliberate, temporary rollback.
  */
-export const logSocketAuthMode = (mode: SocketAuthMode, nodeEnv: string | undefined): void => {
+export const logSocketAuthMode = (
+  mode: SocketAuthMode,
+  source: { NODE_ENV?: string; DEPLOY_ENV?: string } = process.env
+): void => {
   console.log(`Socket auth mode: ${mode}`);
-  if (mode === "permissive" && isProduction(nodeEnv)) {
+  if (mode === "permissive" && isProductionDeployment(source)) {
     console.error(
       JSON.stringify({
         msg: "socket_auth_permissive",

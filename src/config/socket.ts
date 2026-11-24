@@ -34,7 +34,7 @@ export const setupSocketService = (server: any) => {
   subscribeToClient(io);
 
   // Also an error line in production while the opt-in permissive mode is on.
-  logSocketAuthMode(env.SOCKET_AUTH_MODE, process.env.NODE_ENV);
+  logSocketAuthMode(env.SOCKET_AUTH_MODE);
 
   // Handshake auth, SETUP, NEW_MESSAGE, NEW_GROUP_MESSAGE, REACT_MESSAGE,
   // TYPING, DELIVERED and disconnect: see src/socket/handlers.ts.

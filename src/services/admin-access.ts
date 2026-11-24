@@ -10,6 +10,7 @@ import {
 } from "@/models/admin-access";
 import { WILDCARD_PERMISSION, systemRolePermissions } from "@/utils/admin-system-roles";
 import { idString, isObjectIdString } from "@/utils/ids";
+import { isProductionDeployment } from "@/utils/deployment";
 
 /**
  * Who may use the admin oversight endpoints (worktrees/ADMIN-RBAC-CONTRACT.md
@@ -23,9 +24,11 @@ import { idString, isObjectIdString } from "@/utils/ids";
  *  2. A plain token (no `aud`) on an ADMIN account:
  *     - issued before staff.sessionsRevokedAt: 401, whatever the flag;
  *     - ADMIN_SESSION_ENFORCED=true: 401, only admin tokens count;
- *     - no staff record: SUPER_ADMIN until the backend's staff bootstrap has
- *       run (the `adminaccessstate` marker), 401 after it. `staff: null` is
- *       never a staff record;
+ *     - no staff record: 401 in production (security audit 2026-11-24, H2,
+ *       as the backend capped it: there are no roles of the member's own to
+ *       grant, and a plain token asks for no TOTP). Elsewhere SUPER_ADMIN
+ *       until the backend's staff bootstrap has run (the `adminaccessstate`
+ *       marker), 401 after it. `staff: null` is never a staff record;
  *     - SUSPENDED or INVITED: 401;
  *     - an enrolled member (`staff.mfa.enabled`): 401. Their admin power is
  *       reached through password + TOTP only;
@@ -200,7 +203,7 @@ export const decideAdminAccess = async (
   claims: AdminTokenClaims,
   user: AdminCaller | null,
   permission: string,
-  options: { enforced?: boolean } = {}
+  options: { enforced?: boolean; production?: boolean } = {}
 ): Promise<AdminAccessDecision> => {
   const enforced = options.enforced ?? adminSessionEnforced();
   const adminAccount = user?.role === "ADMIN";
@@ -238,7 +241,12 @@ export const decideAdminAccess = async (
     // bootstrap the two are refused alike, so that no longer matters.)
     if (user.staff === null) return sessionRequired("staff_null");
     if (await isAdminBootstrapped()) return sessionRequired("no_staff_after_bootstrap");
-    // Before the bootstrap: every ADMIN keeps the power it had.
+    // Never in production (security audit 2026-11-24, H2): with no staff
+    // record there are no roles of the member's own to grant, and a plain
+    // token asks for no TOTP. Production ran the bootstrap, so this only
+    // bites a production database without the marker (a restore, a hand edit).
+    if (options.production ?? isProductionDeployment()) return sessionRequired("no_staff_in_production");
+    // Before the bootstrap, outside production: every ADMIN keeps the power it had.
     return { allowed: true, roleKeys: ["SUPER_ADMIN"], session: "legacy" };
   }
   // A suspended or not-yet-activated member has no admin power.
