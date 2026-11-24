@@ -8,6 +8,7 @@ import { findReactionTarget, writeReaction } from "@/services/reactions";
 import { pushReaction } from "@/services/chat-push";
 import { writeDelivered } from "@/services/delivered";
 import { blockedInConversation } from "@/services/user-blocks";
+import { findDonationPayment } from "@/services/donation-payments";
 import { registerSocketHandlers } from "@/socket/handlers";
 import { logSocketAuthMode } from "@/socket/auth";
 
@@ -57,6 +58,8 @@ export const setupSocketService = (server: any) => {
     // User blocks (STORE-SAFETY-CONTRACT.md §2.2): REACT_MESSAGE, TYPING and
     // DELIVERED in a blocked pair's private conversation are dropped.
     blockedInConversation,
+    // The signed-out donate page's FOLLOW_DONATION: the payment it names.
+    findDonationPayment,
   });
 
   return io;

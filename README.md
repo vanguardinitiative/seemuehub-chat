@@ -63,6 +63,7 @@ connection with `connect_error`:
 | --- | --- |
 | `TOKEN_EXPIRED` | Refresh the access token, then `socket.connect()` |
 | `TOKEN_INVALID` | Treat as signed out |
+| `RATE_LIMITED` | Only without a token: too many tokenless connections from this address (30 a minute); try again later |
 
 A socket that sends no token at all is a **legacy** socket (see
 `SOCKET_AUTH_MODE`).
@@ -77,6 +78,7 @@ A socket that sends no token at all is a **legacy** socket (see
 | `REACT_MESSAGE` | `{ messageId, emoji }` | Sets the caller's [reaction](#reactions); `emoji: null` removes it. Authenticated sockets only. |
 | `TYPING` | `{ conversationId, typing }` | The [typing indicator](#typing), relayed to the other participants. Authenticated sockets only. |
 | `DELIVERED` | `{ conversationId, upTo? }` | This device has the conversation's messages up to `upTo` (ISO; default now): the [delivered state](#delivered-state). Send it when a `NEW_MESSAGE` from someone else arrives. Authenticated sockets only. |
+| `FOLLOW_DONATION` | `{ referenceId }` | Sockets **without** a token only: hear the outcome of the one anonymous donation `referenceId` names (see [Payments and anonymous donations](#payments-and-anonymous-donations)). Emit after every `connect` while waiting for the payment. |
 
 `messageType` must be one a client may send: `TEXT`, `IMAGE`, `VIDEO`,
 `VOICE`, `FILE`, `REACTION`, `STICKER`, `LOCATION`, `VOICE_CALL`,
@@ -212,7 +214,8 @@ forwarded `true`, which always goes. When a socket disconnects, it sends
 | `NOT_PARTICIPANT` | Not a participant of `conversationId` (or, for `REACT_MESSAGE`, of the message's conversation); nothing was stored, joined or sent |
 | `INVALID_PAYLOAD` | The payload was not an object, or (`field: "messageType"`) its `messageType` is missing or not one a client may send, or (`field: "attachments"`) a `STICKER` failed the [sticker check](#stickers), or (`field: "senderId"`, legacy socket in `permissive` mode) its `senderId` is not a user id; `_id` echoes the client's id |
 | `MESSAGE_SEND_FAILED` | Storing the message failed (`message` says why), after any [retries](#send-order-and-retries); `_id` echoes the client's id and `conversationId` the payload's (null for a first message sent with `receiverId` only). Nothing was delivered |
-| `RATE_LIMITED` | More than 10 `REACT_MESSAGE` in 10 s from this socket; `messageId` echoes the client's |
+| `RATE_LIMITED` | More than 10 `REACT_MESSAGE` in 10 s from this socket; `messageId` echoes the client's. For `FOLLOW_DONATION`: more than 10 attempts a minute from this address |
+| `DONATION_NOT_FOLLOWABLE` | `FOLLOW_DONATION` refused, whatever the reason (the same answer, so ids cannot be probed): see [Payments and anonymous donations](#payments-and-anonymous-donations) |
 | `ORDER_COMPLETED` | `NEW_MESSAGE` / `NEW_GROUP_MESSAGE` into the chat of an order that is `COMPLETED` (see [Order conversations](#order-conversations)). Checked inside the send's transaction, which is aborted and not retried: nothing was stored, delivered or pushed. `_id` and `conversationId` as for `MESSAGE_SEND_FAILED` |
 | `CHAT_USER_BLOCKED` | `NEW_MESSAGE` into a private one-to-one conversation between a blocked pair, whoever blocked whom (see [User blocks](#user-blocks)). Checked inside the send's transaction, which is aborted and not retried: nothing was stored (not even the conversation a `receiverId` send would have made), delivered or pushed. `_id` and `conversationId` as for `MESSAGE_SEND_FAILED` |
 
@@ -287,7 +290,8 @@ What a legacy (tokenless) socket may do:
 Every client that opens a socket to this service sends its token: the web
 (www and the web-classic rollback) and the Seemuehub app. Admin, the
 organization portal and the Seemuebiz app open none. The one tokenless socket
-left is the signed-out donate page, which only listens.
+left is the signed-out donate page, which only listens, through
+`FOLLOW_DONATION` (below).
 
 Rolling back is adding `SOCKET_AUTH_MODE=permissive` to the `ENV` secret and
 redeploying; take it out again as soon as the cause is fixed.
@@ -297,14 +301,36 @@ redeploying; take it out again as soon as the cause is fixed.
 `POST /core-socket/payment` (the backend, after an IB Bank callback) delivers
 `LISTENING` `PAYMENT` to the payer's room. Donations can be anonymous
 (`POST /donates` takes optional auth), and the signed-out donate page matches
-the result on `referenceId`, the Donate document's ObjectId. That id is not a
-secret (ObjectIds are a timestamp and a counter, and the broadcast hands every
-one to every socket), so the trimmed `{ type, referenceId, status }` broadcast
-for donations only happens in `permissive` mode. In `enforce` mode (the
-default) a donation reaches its donor's room if the donor was signed in, and
-nobody otherwise.
-Keeping live confirmation for anonymous donors needs an unguessable per-donation
-key from the backend (see the PR that introduced this).
+the result on `referenceId`, the Donate document's ObjectId, which
+`POST /donates` answers as `data.payment.referenceId`.
+
+That page has no token, so it gets one narrow exception: after creating the
+donation it sends `FOLLOW_DONATION { referenceId }` (again after every
+reconnect), and the socket joins that donation's room. The service checks the
+payment first, in the shared database: it must be a `DONATE` payment with that
+`referenceId`, made signed out (a signed-in donor hears it in their own room),
+still payable (`PENDING`, `PROCESSING`, or `FAILED`, which the payer may retry),
+and created in the last **15 minutes**. One donation per socket. Every refusal
+is the same `ERROR` `DONATION_NOT_FOLLOWABLE` (the reason is only logged, as
+`donation_follow_refused`). The room hears nothing but that donation's
+`LISTENING` `{ type: "PAYMENT", response: { type, referenceId, status } }`:
+no amount, description or donor. The socket stays tokenless for everything
+else, so `SETUP`, sends, reactions, typing and delivered marks are still
+`AUTH_REQUIRED`.
+
+Sockets without a token are limited per client address (the CDN's client
+header, then the proxies', then the peer; in memory, per instance): 30
+handshakes a minute (`connect_error` `RATE_LIMITED`) and 10 `FOLLOW_DONATION`
+attempts a minute, refused ones included (`ERROR` `RATE_LIMITED`).
+
+`referenceId` is an ObjectId, not a random secret. The window, the
+signed-out-only rule, the per-address limit and the trimmed event keep what
+following someone else's donation could tell anyone to that donation's
+status. A random per-donation key from the backend would close that too: see
+the PR that added `FOLLOW_DONATION`.
+
+In `permissive` mode the trimmed event is also still broadcast to every
+socket outside the room, as before.
 
 Other log lines: `socket_auth_refused` (a bad token at the handshake, with its
 code), `setup_user_mismatch` (an authenticated SETUP named another userId),

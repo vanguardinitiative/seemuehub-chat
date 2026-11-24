@@ -47,6 +47,8 @@ export interface SocketData {
   typing?: Map<string, TypingEntry>;
   /** DELIVERED's throttle per conversationId (socket/handlers.ts). */
   delivered?: Map<string, { lastWriteAt: number | null; pendingUpTo?: Date; timer?: unknown; userId: string }>;
+  /** The one donation room a socket without a token follows (socket/donation-follow.ts). */
+  donationRoom?: string;
 }
 
 export const dataOf = (socket: Socket): SocketData => socket.data as SocketData;
@@ -60,7 +62,8 @@ export type SocketErrorCode =
   | "RATE_LIMITED"
   | "ORG_CHAT_BLOCKED"
   | "ORDER_COMPLETED"
-  | "CHAT_USER_BLOCKED";
+  | "CHAT_USER_BLOCKED"
+  | "DONATION_NOT_FOLLOWABLE";
 
 const ERROR_MESSAGES: Record<SocketErrorCode, string> = {
   AUTH_REQUIRED: "Connect with auth: { token } to use this event",
@@ -73,6 +76,8 @@ const ERROR_MESSAGES: Record<SocketErrorCode, string> = {
   ORDER_COMPLETED: "This order is completed; its chat no longer takes messages",
   // The same words whoever blocked whom (STORE-SAFETY-CONTRACT.md §2.2).
   CHAT_USER_BLOCKED: "You can't message this person",
+  // One answer for every reason, so it says nothing about which ids exist.
+  DONATION_NOT_FOLLOWABLE: "This donation can't be followed",
 };
 
 /** Every refusal goes out as one `ERROR` event of this shape. */
@@ -98,6 +103,9 @@ const origin = (socket: Socket): string | null => {
 /** Absent means not sent at all: undefined, null, or an empty string. */
 const isAbsent = (raw: unknown): boolean =>
   raw === undefined || raw === null || (typeof raw === "string" && raw.trim() === "");
+
+/** Whether the handshake carries a token at all (a bad one is refused by socketAuthMiddleware). */
+export const sendsToken = (socket: Socket): boolean => !isAbsent(socket.handshake.auth?.token);
 
 /**
  * `io.use` middleware. A present but bad token refuses the connection, and the

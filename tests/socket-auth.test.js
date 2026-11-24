@@ -835,23 +835,23 @@ test("routePayment", async (t) => {
     ]);
   });
 
-  await t.test("permissive: an anonymous donation is broadcast trimmed, as before", () => {
+  await t.test("permissive: an anonymous donation goes to its followers' room, and is broadcast trimmed to everyone else, as before", () => {
     const data = { _id: oid(), type: "DONATE", status: "SUCCESS", referenceId, amount: 50000 };
+    const trimmed = { type: "PAYMENT", response: { type: "DONATE", referenceId, status: "SUCCESS" } };
     assert.deepStrictEqual(routePayment(data, "permissive"), [
-      {
-        broadcast: true,
-        except: [],
-        payload: { type: "PAYMENT", response: { type: "DONATE", referenceId, status: "SUCCESS" } },
-      },
+      { to: `donation:${referenceId}`, payload: trimmed },
+      { broadcast: true, except: [`donation:${referenceId}`], payload: trimmed },
     ]);
   });
 
-  await t.test("enforce: no broadcast; a signed-in donation reaches its donor, an anonymous one nobody", () => {
+  await t.test("enforce: no broadcast; a signed-in donation reaches its donor, an anonymous one only its followers' room", () => {
     const signedIn = { userId, type: "DONATE", status: "SUCCESS", referenceId };
     assert.deepStrictEqual(routePayment(signedIn, "enforce"), [
       { to: userId, payload: { type: "PAYMENT", response: signedIn } },
     ]);
-    assert.deepStrictEqual(routePayment({ type: "DONATE", status: "SUCCESS", referenceId }, "enforce"), []);
+    assert.deepStrictEqual(routePayment({ type: "DONATE", status: "SUCCESS", referenceId }, "enforce"), [
+      { to: `donation:${referenceId}`, payload: { type: "PAYMENT", response: { type: "DONATE", referenceId, status: "SUCCESS" } } },
+    ]);
   });
 
   await t.test("deliverPayment: the donor gets the full event once, others the trimmed one", async () => {

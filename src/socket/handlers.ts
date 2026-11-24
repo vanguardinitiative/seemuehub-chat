@@ -6,11 +6,21 @@ import {
   logEvent,
   logLegacyConnection,
   refuse,
+  sendsToken,
   socketAuthMiddleware,
   verifiedActorFor,
   type SocketAuthMode,
   type SocketErrorCode,
 } from "./auth";
+import {
+  ANONYMOUS_LIMITS,
+  clientAddressOf,
+  createRateLimiter,
+  donationRoomOf,
+  followRefusal,
+  type DonationPayment,
+  type RateRule,
+} from "./donation-follow";
 import type { ReactionPush } from "@/services/chat-push";
 import { DELIVERED_INTERVAL_MS, clampUpTo, deliveryMoves, otherParticipants, type DeliveredConversation, type DeliveredNotice } from "@/utils/delivered";
 import type { ConversationMember } from "@/utils/conversation-access";
@@ -138,6 +148,13 @@ export interface SocketDeps {
    * TYPING and DELIVERED in one are dropped, silently. Absent: no blocks.
    */
   blockedInConversation?: (conversationId: string, userId: string) => Promise<boolean>;
+  /**
+   * The DONATE payment with this referenceId (services/donation-payments.ts),
+   * for FOLLOW_DONATION. Absent: no donation can be followed.
+   */
+  findDonationPayment?: (referenceId: string) => Promise<DonationPayment | null>;
+  /** Per-address limits for sockets without a token; ANONYMOUS_LIMITS unless a test passes its own. */
+  anonymousLimits?: { connections: RateRule; follows: RateRule };
   /** The clock for the throttles; Date.now unless a test passes one. */
   now?: () => number;
   /** Timers for DELIVERED's deferred write; setTimeout / clearTimeout unless a test passes its own. */
@@ -189,10 +206,30 @@ const withoutReservedFields = (data: Record<string, unknown>): MessagePayload =>
 };
 
 export const registerSocketHandlers = (io: Server, deps: SocketDeps): void => {
-  io.use(socketAuthMiddleware);
+  const limits = deps.anonymousLimits ?? ANONYMOUS_LIMITS;
+  const allowConnection = createRateLimiter(limits.connections);
+  const allowFollow = createRateLimiter(limits.follows);
+  const clock = deps.now ?? Date.now;
+
+  // A handshake without a token is counted per client address first; one
+  // with a token never is. Past the limit: connect_error RATE_LIMITED.
+  io.use((socket, next) => {
+    if (!sendsToken(socket) && !allowConnection(clientAddressOf(socket), clock())) {
+      logEvent({ msg: "anonymous_socket_limited", event: "connect" });
+      next(Object.assign(new Error("RATE_LIMITED"), { data: { code: "RATE_LIMITED" } }));
+      return;
+    }
+    socketAuthMiddleware(socket, next);
+  });
 
   io.on("connection", (socket) => {
     logLegacyConnection(socket, deps.mode);
+
+    socket.on("FOLLOW_DONATION", (data: unknown) => {
+      handleFollowDonation(socket, deps, (key) => allowFollow(key, clock()), data).catch((error) => {
+        console.error("FOLLOW_DONATION failed", { socketId: socket.id, error: error instanceof Error ? error.message : error });
+      });
+    });
 
     socket.on("SETUP", (data: unknown) => {
       handleSetup(socket, deps, data).catch((error) => {
@@ -243,6 +280,56 @@ export const registerSocketHandlers = (io: Server, deps: SocketDeps): void => {
       deps.publish("USER_OFFLINE", JSON.stringify({ socketId: socket.id, userId: roomUserId, partners: partners ?? [] }));
     });
   });
+};
+
+/**
+ * FOLLOW_DONATION { referenceId }: a socket without a token joins the room of
+ * the one anonymous donation it names, where only that donation's PAYMENT
+ * event goes (socket/rooms.ts routePayment), trimmed to what the donate page
+ * shows. The payment is checked on the server first (socket/donation-follow.ts
+ * followRefusal). Every refusal is the same ERROR DONATION_NOT_FOLLOWABLE,
+ * logged with its reason; attempts are counted per client address before
+ * anything is read, refused ones too.
+ */
+const handleFollowDonation = async (
+  socket: Socket,
+  deps: SocketDeps,
+  allowFollow: (clientAddress: string) => boolean,
+  raw: unknown
+): Promise<void> => {
+  const event = "FOLLOW_DONATION";
+  const socketData = dataOf(socket);
+  const refuseFollow = (reason: string): void => {
+    logEvent({ msg: "donation_follow_refused", reason, socketId: socket.id });
+    refuse(socket, event, "DONATION_NOT_FOLLOWABLE");
+  };
+
+  // A socket with a token hears its own donations in its user room.
+  if (socketData.userId) return refuseFollow("AUTHENTICATED");
+  if (!allowFollow(clientAddressOf(socket))) {
+    logEvent({ msg: "anonymous_socket_limited", event, socketId: socket.id });
+    refuse(socket, event, "RATE_LIMITED");
+    return;
+  }
+
+  const referenceId = raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>).referenceId : undefined;
+  const room = donationRoomOf(referenceId);
+  if (!room) return refuseFollow("INVALID_ID");
+  // One donation per socket; naming it again changes nothing.
+  if (socketData.donationRoom === room) return;
+  if (socketData.donationRoom) return refuseFollow("ONE_PER_SOCKET");
+  // A legacy socket that SETUP as a user (permissive mode only) is not a listener.
+  if (socketData.roomUserId) return refuseFollow("SET_UP");
+
+  const payment = deps.findDonationPayment ? await deps.findDonationPayment(referenceId as string) : null;
+  const refusal = followRefusal(payment, (deps.now ?? Date.now)());
+  if (refusal) return refuseFollow(refusal);
+  // Another follow on this socket may have joined while this one was reading.
+  if (socketData.donationRoom && socketData.donationRoom !== room) return refuseFollow("ONE_PER_SOCKET");
+
+  socketData.donationRoom = room;
+  socket.join(room);
+  logEvent({ msg: "donation_followed", socketId: socket.id });
 };
 
 /**
