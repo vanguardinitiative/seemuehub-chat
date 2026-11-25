@@ -196,7 +196,13 @@ const conversationSchema = new Schema<IConversation>(
     workTitle: String,
     orderBudget: {
       amount: { type: Number, min: 0 },
-      currency: { type: String, default: "THB" },
+      // Kip only (2026-11-25), as in the backend: a THB/USD from an older client is stored as LAK.
+      currency: {
+        type: String,
+        default: "LAK",
+        set: (value: unknown) =>
+          typeof value === "string" && ["LAK", "THB", "USD"].includes(value.trim().toUpperCase()) ? "LAK" : value,
+      },
     },
     orderDeadline: Date,
     isOrderActive: {
