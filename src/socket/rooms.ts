@@ -1,5 +1,6 @@
 import type { Server } from "socket.io";
 import { dataOf, logEvent, type SocketAuthMode } from "./auth";
+import { donationRoomOf } from "./donation-follow";
 
 /**
  * Who hears what, for the Redis subscribers in config/redis.ts. Kept free of
@@ -237,28 +238,34 @@ export type PaymentDelivery =
  * payload (already trimmed by the backend's chatPaymentPayload).
  *
  * A donation can be anonymous: POST /donates takes optional auth and the
- * signed-out /donate page matches the result on `referenceId`, which is the
- * Donate document's ObjectId. That is not a secret - ObjectIds are a
- * timestamp and a counter, and the broadcast hands every one of them to every
- * socket anyway - so the broadcast (reduced to type, referenceId and status)
- * is kept only in permissive mode. In enforce mode a donation reaches its
- * donor's room, if it has one, and nobody else.
+ * signed-out /donate page matches the result on `referenceId`, the Donate
+ * document's ObjectId. An anonymous donation goes, reduced to type,
+ * referenceId and status, to its own room, `donation:{referenceId}`, which
+ * only a socket that followed it joins (FOLLOW_DONATION,
+ * socket/donation-follow.ts). The old broadcast of that reduced event to every
+ * socket is kept only in permissive mode, to everyone outside the room.
  */
 export const routePayment = (data: any, mode: SocketAuthMode): PaymentDelivery[] => {
   const userId = data?.userId ? String(data.userId) : "";
   const deliveries: PaymentDelivery[] = [];
   if (userId) deliveries.push({ to: userId, payload: { type: "PAYMENT", response: data } });
 
-  if (data?.type === "DONATE" && mode === "permissive") {
-    deliveries.push({
-      broadcast: true,
-      // The donor already has the full event in its room.
-      except: userId ? [userId] : [],
-      payload: {
-        type: "PAYMENT",
-        response: { type: data.type, referenceId: data.referenceId, status: data.status },
-      },
-    });
+  if (data?.type === "DONATE") {
+    const trimmed: PaymentEvent = {
+      type: "PAYMENT",
+      response: { type: data.type, referenceId: data.referenceId, status: data.status },
+    };
+    // A signed-in donor has the full event in its own room; no follower room.
+    const room = userId ? null : donationRoomOf(data.referenceId);
+    if (room) deliveries.push({ to: room, payload: trimmed });
+    if (mode === "permissive") {
+      deliveries.push({
+        broadcast: true,
+        // The donor, or the followers, already have it.
+        except: userId ? [userId] : room ? [room] : [],
+        payload: trimmed,
+      });
+    }
   }
   return deliveries;
 };

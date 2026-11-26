@@ -8,7 +8,9 @@ import { findReactionTarget, writeReaction } from "@/services/reactions";
 import { pushReaction } from "@/services/chat-push";
 import { writeDelivered } from "@/services/delivered";
 import { blockedInConversation } from "@/services/user-blocks";
+import { findDonationPayment } from "@/services/donation-payments";
 import { registerSocketHandlers } from "@/socket/handlers";
+import { logSocketAuthMode } from "@/socket/auth";
 
 export type { SetupMessage as DataType } from "@/socket/handlers";
 
@@ -31,7 +33,8 @@ export const setupSocketService = (server: any) => {
   // Try to subscribe immediately (in case Redis is already connected)
   subscribeToClient(io);
 
-  console.log(`Socket auth mode: ${env.SOCKET_AUTH_MODE}`);
+  // Also an error line in production while the opt-in permissive mode is on.
+  logSocketAuthMode(env.SOCKET_AUTH_MODE);
 
   // Handshake auth, SETUP, NEW_MESSAGE, NEW_GROUP_MESSAGE, REACT_MESSAGE,
   // TYPING, DELIVERED and disconnect: see src/socket/handlers.ts.
@@ -55,6 +58,8 @@ export const setupSocketService = (server: any) => {
     // User blocks (STORE-SAFETY-CONTRACT.md §2.2): REACT_MESSAGE, TYPING and
     // DELIVERED in a blocked pair's private conversation are dropped.
     blockedInConversation,
+    // The signed-out donate page's FOLLOW_DONATION: the payment it names.
+    findDonationPayment,
   });
 
   return io;

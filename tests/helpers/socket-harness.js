@@ -143,9 +143,12 @@ async function startServer({ mode = "permissive", deps = {} } = {}) {
         list.map((entry) => (typeof entry === "string" ? { userId: entry, isMuted: false } : { isMuted: false, ...entry }))
       );
     },
-    /** A client; `auth` undefined means a legacy client that sends none. */
-    client(auth) {
-      const client = connect(url, { transports: ["websocket"], forceNew: true, reconnection: false, auth });
+    /**
+     * A client; `auth` undefined means a legacy client that sends none.
+     * `options` go to socket.io-client as they are (e.g. `extraHeaders`).
+     */
+    client(auth, options = {}) {
+      const client = connect(url, { transports: ["websocket"], forceNew: true, reconnection: false, auth, ...options });
       clients.push(client);
       return client;
     },

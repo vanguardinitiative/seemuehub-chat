@@ -5,6 +5,7 @@ import { staffModel } from "@/models/staff";
 import { userModel } from "@/models/user";
 import { Request, Response } from "express";
 import mongoose, { Types } from "mongoose";
+import { z } from "zod";
 import { StaffRole } from "./helper";
 import { participantOf, userIdOf } from "@/utils/conversation-access";
 import { isReadFor, type ReadStateConversation } from "@/utils/read-state";
@@ -36,9 +37,48 @@ const legacyReadMap = async (messageIds: unknown[], userId: string): Promise<Map
   return statusMap;
 };
 
+/** A 24-hex ObjectId string; an object such as `{"$ne": null}` or a number is not. */
+const objectIdString = z.string().regex(/^[0-9a-fA-F]{24}$/);
+
+/**
+ * What POST /conversations/private reads from its body. Every value that goes
+ * into the Mongo query has to be a plain id string: JSON can carry an object
+ * like `{"$ne": null}`, which Mongo would read as an operator. `senderId` is
+ * never used (the sender is the token's user); it is only checked because the
+ * clients still send it. Anything else in the body is ignored, as before.
+ */
+const privateBody = z.object({
+  receiverId: objectIdString,
+  orderId: objectIdString.nullish(),
+  senderId: z.string().nullish(),
+});
+
+/**
+ * What POST /conversations/group reads from its body. The sender is the
+ * token's user; a `senderId` here is ignored, and must still be a string.
+ */
+const groupBody = z.object({
+  senderId: z.string().nullish(),
+  platform: z.string().nullish(),
+});
+
+/**
+ * The participant fields the support group answers with: who they are, never
+ * how to reach them (no phone, email or role).
+ */
+const GROUP_PARTICIPANT_FIELDS = "userName displayName profileImage";
+
 const createPrivateConversation = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { receiverId, orderId, orderStatus, orderTitle, orderBudget, orderDeadline, orderPriority } = req.body;
+    // Only id strings reach the query below: an object such as {"$ne": null}
+    // for receiverId or orderId would match whatever the caller is in. A
+    // missing receiverId is the same 400 it always was.
+    const body = privateBody.safeParse(req.body ?? {});
+    if (!body.success) {
+      res.status(400).json(messages.BAD_REQUEST);
+      return;
+    }
+    const { receiverId, orderId } = body.data;
 
     // The sender is whoever holds the token, full stop.
     //
@@ -56,13 +96,8 @@ const createPrivateConversation = async (req: Request, res: Response): Promise<v
       res.status(401).json(messages.UNAUTHORIZED);
       return;
     }
-    if (req.body.senderId && String(req.body.senderId) !== senderId) {
-      console.warn("[access] senderId in body ignored", { claimed: req.body.senderId, actual: senderId });
-    }
-
-    if (!receiverId) {
-      res.status(400).json(messages.BAD_REQUEST);
-      return;
+    if (body.data.senderId && body.data.senderId !== senderId) {
+      console.warn("[access] senderId in body ignored", { claimed: body.data.senderId, actual: senderId });
     }
 
     if (senderId === receiverId) {
@@ -165,7 +200,22 @@ const createPrivateConversation = async (req: Request, res: Response): Promise<v
 };
 const createGroupConversation = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { senderId, platform } = req.body;
+    // The sender is whoever holds the token, as on every other route. The body
+    // is read only for strings: its values used to reach the query as given.
+    const senderId = userIdOf(req);
+    if (!senderId) {
+      res.status(401).json(messages.UNAUTHORIZED);
+      return;
+    }
+    const body = groupBody.safeParse(req.body ?? {});
+    if (!body.success) {
+      res.status(400).json(messages.BAD_REQUEST);
+      return;
+    }
+    const { platform } = body.data;
+    if (body.data.senderId && body.data.senderId !== senderId) {
+      console.warn("[access] senderId in body ignored", { claimed: body.data.senderId, actual: senderId });
+    }
 
     const existingConversation = await conversationModel
       .findOne({
@@ -174,8 +224,7 @@ const createGroupConversation = async (req: Request, res: Response): Promise<voi
           $all: [{ $elemMatch: { user: senderId } }],
         },
       })
-      .populate("participants.user", "userName displayName isFreelancer phone email role profileImage");
-    console.log("step 2");
+      .populate("participants.user", GROUP_PARTICIPANT_FIELDS);
 
     if (existingConversation) {
       res.status(200).json({
@@ -198,7 +247,6 @@ const createGroupConversation = async (req: Request, res: Response): Promise<voi
     // const allStaff = await staffModel.find({}, "_id").lean();
     const allStaff = await staffModel.find({ role: { $in: role } }, "_id").lean();
 
-    console.log("senderType======>", senderType);
     const participants = [
       { user: senderId, joinDate: Date.now(), userType: senderType },
       ...allStaff.map((staff) => ({
@@ -221,7 +269,7 @@ const createGroupConversation = async (req: Request, res: Response): Promise<voi
       .findOne({
         _id: newConversation._id,
       })
-      .populate("participants.user", "userName displayName isFreelancer phone email role profileImage isOnline");
+      .populate("participants.user", GROUP_PARTICIPANT_FIELDS);
 
     res.status(201).json({
       code: messages.CREATE_SUCCESSFUL.code,

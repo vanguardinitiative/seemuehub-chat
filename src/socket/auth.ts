@@ -1,5 +1,6 @@
 import type { Socket } from "socket.io";
 import { AccessTokenError, verifyAccessToken } from "@/utils/access-token";
+import { isProductionDeployment } from "@/utils/deployment";
 import type { TypingEntry } from "./typing";
 
 /**
@@ -14,11 +15,14 @@ import type { TypingEntry } from "./typing";
  * shipped before this change, and a signed-out visitor on /donate.
  * SOCKET_AUTH_MODE decides what it may do:
  *
- * - permissive (default): what it always could, trusting the userId/senderId
- *   in its payloads, with a `legacy_socket` log line per event so the
- *   remaining legacy clients can be counted.
- * - enforce: it may stay connected and receive broadcasts, but SETUP and
- *   message sends are answered with ERROR { code: "AUTH_REQUIRED" }.
+ * - enforce (default): it may stay connected and receive broadcasts, but
+ *   SETUP and message sends are answered with ERROR { code: "AUTH_REQUIRED" }.
+ * - permissive (explicit opt-in, an error at boot in production): it may
+ *   SETUP and send as the userId/senderId its payloads claim, with a
+ *   `legacy_socket` log line per event so the remaining legacy clients can be
+ *   counted. Even then it joins a conversation's room, or sends into an
+ *   existing conversation, only when that user is one of its participants
+ *   (socket/handlers.ts), as an authenticated socket does.
  */
 
 export type SocketAuthMode = "permissive" | "enforce";
@@ -44,6 +48,8 @@ export interface SocketData {
   typing?: Map<string, TypingEntry>;
   /** DELIVERED's throttle per conversationId (socket/handlers.ts). */
   delivered?: Map<string, { lastWriteAt: number | null; pendingUpTo?: Date; timer?: unknown; userId: string }>;
+  /** The one donation room a socket without a token follows (socket/donation-follow.ts). */
+  donationRoom?: string;
 }
 
 export const dataOf = (socket: Socket): SocketData => socket.data as SocketData;
@@ -57,7 +63,8 @@ export type SocketErrorCode =
   | "RATE_LIMITED"
   | "ORG_CHAT_BLOCKED"
   | "ORDER_COMPLETED"
-  | "CHAT_USER_BLOCKED";
+  | "CHAT_USER_BLOCKED"
+  | "DONATION_NOT_FOLLOWABLE";
 
 const ERROR_MESSAGES: Record<SocketErrorCode, string> = {
   AUTH_REQUIRED: "Connect with auth: { token } to use this event",
@@ -70,6 +77,8 @@ const ERROR_MESSAGES: Record<SocketErrorCode, string> = {
   ORDER_COMPLETED: "This order is completed; its chat no longer takes messages",
   // The same words whoever blocked whom (STORE-SAFETY-CONTRACT.md §2.2).
   CHAT_USER_BLOCKED: "You can't message this person",
+  // One answer for every reason, so it says nothing about which ids exist.
+  DONATION_NOT_FOLLOWABLE: "This donation can't be followed",
 };
 
 /** Every refusal goes out as one `ERROR` event of this shape. */
@@ -95,6 +104,9 @@ const origin = (socket: Socket): string | null => {
 /** Absent means not sent at all: undefined, null, or an empty string. */
 const isAbsent = (raw: unknown): boolean =>
   raw === undefined || raw === null || (typeof raw === "string" && raw.trim() === "");
+
+/** Whether the handshake carries a token at all (a bad one is refused by socketAuthMiddleware). */
+export const sendsToken = (socket: Socket): boolean => !isAbsent(socket.handshake.auth?.token);
 
 /**
  * `io.use` middleware. A present but bad token refuses the connection, and the
@@ -187,6 +199,29 @@ export const verifiedActorFor = (
   }
   const actor = actorFor(socket, event, mode, undefined, now);
   return actor && actor.kind === "verified" ? actor : null;
+};
+
+/**
+ * The boot line for SOCKET_AUTH_MODE. permissive lets a tokenless socket act
+ * as whichever user it names, so in production (utils/deployment.ts: NODE_ENV
+ * or DEPLOY_ENV "production", any case) it is also logged as an error,
+ * `socket_auth_permissive`. The service still starts: setting it is a
+ * deliberate, temporary rollback.
+ */
+export const logSocketAuthMode = (
+  mode: SocketAuthMode,
+  source: { NODE_ENV?: string; DEPLOY_ENV?: string } = process.env
+): void => {
+  console.log(`Socket auth mode: ${mode}`);
+  if (mode === "permissive" && isProductionDeployment(source)) {
+    console.error(
+      JSON.stringify({
+        msg: "socket_auth_permissive",
+        mode,
+        detail: "SOCKET_AUTH_MODE=permissive in production: sockets without a token may act as the user they name. Remove it; enforce is the default.",
+      })
+    );
+  }
 };
 
 /** Logs a tokenless connection; the event handlers log (and in enforce, refuse) what it then tries. */

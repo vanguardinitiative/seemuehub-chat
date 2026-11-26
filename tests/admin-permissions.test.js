@@ -457,6 +457,50 @@ test("ADMIN accounts with no staff record (flag off)", async (t) => {
     });
   });
 
+  // Security audit 2026-11-24, H2, as seemuehub-backend capped the same path:
+  // with no staff record there are no roles of the member's own to grant, and
+  // a plain token asks for no TOTP, so in production the transition grants
+  // nothing, whatever the marker says (a restored database, a marker read
+  // that lies).
+  const withEnv = (name, value) => {
+    const previous = process.env[name];
+    process.env[name] = value;
+    return () => {
+      if (previous === undefined) delete process.env[name];
+      else process.env[name] = previous;
+    };
+  };
+  for (const [name, value] of [["NODE_ENV", "production"], ["NODE_ENV", "PRODUCTION"], ["DEPLOY_ENV", "production"]]) {
+    await t.test(`${name}=${value}, before the bootstrap marker: never Super Admin, 401, no audit row`, async () => {
+      const restore = withEnv(name, value);
+      try {
+        await scenario({ bootstrapped: false, users: { [ADMIN]: legacy() } }, async (world) => {
+          for (const url of [LIST, TRANSCRIPT]) assertSessionRequired(await get(url, { token: plainToken(ADMIN) }), url);
+          await settle();
+          assert.deepStrictEqual(world.audit, []);
+        });
+      } finally {
+        restore();
+      }
+    });
+  }
+
+  await t.test("in production, a staff member's plain token still gets exactly their own roles, never more", async () => {
+    const restore = withEnv("NODE_ENV", "production");
+    try {
+      await scenario({ bootstrapped: false, users: { [ADMIN]: staffUser({ id: ADMIN, roles: ["MODERATOR"] }) } }, async (world) => {
+        assert.strictEqual((await get(LIST, { token: plainToken(ADMIN) })).status, 200);
+        await settle();
+        assert.deepStrictEqual(world.audit[0].actorRoleKeys, ["MODERATOR"]);
+      });
+      await scenario({ bootstrapped: false, users: { [ADMIN]: staffUser({ id: ADMIN, roles: ["SUPPORT"] }) } }, async () => {
+        assertPermissionRequired(await get(LIST, { token: plainToken(ADMIN) }));
+      });
+    } finally {
+      restore();
+    }
+  });
+
   await t.test("a marker that cannot be read is 503, neither a grant nor a sign-out", async () => {
     await scenario({ fail: ["marker"], users: { [ADMIN]: legacy() } }, async () => {
       const res = await get(LIST, { token: plainToken(ADMIN) });

@@ -40,7 +40,7 @@ app.use(express.json());
 app.use("/v1/api", router);
 
 const listen = () => new Promise((resolve) => { const server = app.listen(0, () => resolve(server)); });
-const post = (port, url, { token, body }) =>
+const post = (port, url, { token, body, headers = {} }) =>
   new Promise((resolve) => {
     const payload = JSON.stringify(body);
     const req = http.request(
@@ -52,6 +52,7 @@ const post = (port, url, { token, body }) =>
           "Content-Type": "application/json",
           "Content-Length": Buffer.byteLength(payload),
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          ...headers,
         },
       },
       (res) => {
@@ -272,14 +273,17 @@ test("latestMessageData.messageType", async (t) => {
 
   await t.test("POST /orders (an order event) writes TEXT next to its orderStep", async () => {
     updates.length = 0;
+    // The route refuses everyone without a configured key; the test is the backend.
+    const KEY = "test-sticker-orders-key";
     const restoreKey = (() => {
       const previous = env.CHAT_INTERNAL_KEY;
-      env.CHAT_INTERNAL_KEY = undefined;
+      env.CHAT_INTERNAL_KEY = KEY;
       return () => (env.CHAT_INTERNAL_KEY = previous);
     })();
     const restoreCreate = stub(messageModel, "create", async (doc) => ({ _id: new Types.ObjectId(), ...doc }));
     const server = await listen();
     const res = await post(server.address().port, "/v1/api/orders", {
+      headers: { "X-Internal-Key": KEY },
       body: { _id: oid(), orderId: oid(), orderSender: oid(), participants: [], latestMessageData: { orderStep: "CANCELLED" } },
     });
     server.close();

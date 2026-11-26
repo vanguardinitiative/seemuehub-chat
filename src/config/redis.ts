@@ -225,8 +225,9 @@ const subscribeToClient = async (io: Server): Promise<void> => {
         const data: any = JSON.parse(message);
 
         // A payment goes to its payer's room (sockets join their userId on
-        // SETUP). Anonymous donations are the one broadcast left, and only
-        // in permissive mode: see routePayment in src/socket/rooms.ts.
+        // SETUP); an anonymous donation to the room of the sockets that
+        // followed it (FOLLOW_DONATION), and its old broadcast only in
+        // permissive mode: see routePayment in src/socket/rooms.ts.
         const deliveries = routePayment(data, env.SOCKET_AUTH_MODE);
         if (deliveries.length === 0) {
           console.warn("PAYMENT without a userId was not delivered", { id: data?._id, type: data?.type });

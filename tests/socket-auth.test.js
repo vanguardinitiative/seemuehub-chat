@@ -598,6 +598,56 @@ test("a verified socket whose token expires mid-connection", async (t) => {
 
 // ---------------------------------------------------------------- modes
 
+test("SOCKET_AUTH_MODE defaults to enforce; permissive is an opt-in that is an error in production", async (t) => {
+  const { execFileSync } = require("node:child_process");
+  const path = require("node:path");
+  const root = path.join(__dirname, "..");
+  /** SOCKET_AUTH_MODE as config/env.ts parses it, in a fresh process. */
+  const parsedMode = (value) => {
+    const env = { PATH: process.env.PATH, MONGODB_URI: "mongodb://127.0.0.1:1/x", REDIS_HOST: "127.0.0.1", REDIS_PORT: "6379", REDIS_PASSWORD: "" };
+    if (value !== undefined) env.SOCKET_AUTH_MODE = value;
+    return execFileSync(process.execPath, ["-e", 'process.stdout.write(require("./dist/config/env.js").env.SOCKET_AUTH_MODE)'], { cwd: root, env }).toString();
+  };
+
+  await t.test("unset or empty: enforce", () => {
+    assert.strictEqual(parsedMode(undefined), "enforce");
+    assert.strictEqual(parsedMode(""), "enforce");
+  });
+
+  await t.test("permissive only when asked for", () => {
+    assert.strictEqual(parsedMode("permissive"), "permissive");
+  });
+
+  const { logSocketAuthMode } = require("../dist/socket/auth.js");
+  const capture = (fn) => {
+    const lines = { log: [], error: [] };
+    const original = { log: console.log, error: console.error };
+    console.log = (...args) => lines.log.push(args.join(" "));
+    console.error = (...args) => lines.error.push(args.join(" "));
+    try {
+      fn();
+    } finally {
+      console.log = original.log;
+      console.error = original.error;
+    }
+    return lines;
+  };
+
+  for (const source of [{ NODE_ENV: "production" }, { NODE_ENV: "PRODUCTION" }, { NODE_ENV: "DEVELOPMENT", DEPLOY_ENV: "production" }]) {
+    await t.test(`permissive with ${JSON.stringify(source)} logs an error at boot`, () => {
+      const lines = capture(() => logSocketAuthMode("permissive", source));
+      assert.strictEqual(lines.error.length, 1);
+      assert.match(lines.error[0], /socket_auth_permissive/);
+    });
+  }
+
+  await t.test("enforce in production, or permissive outside it, is no error", () => {
+    assert.deepStrictEqual(capture(() => logSocketAuthMode("enforce", { NODE_ENV: "production" })).error, []);
+    assert.deepStrictEqual(capture(() => logSocketAuthMode("permissive", { NODE_ENV: "DEVELOPMENT" })).error, []);
+    assert.deepStrictEqual(capture(() => logSocketAuthMode("permissive", {})).error, []);
+  });
+});
+
 test("SOCKET_AUTH_MODE=permissive keeps legacy sockets working, and logs them", async (t) => {
   const server = await startServer("permissive");
   const client = await connected(server.client(undefined));
@@ -621,10 +671,64 @@ test("SOCKET_AUTH_MODE=permissive keeps legacy sockets working, and logs them", 
     assert.strictEqual(logged("legacy_socket", { event: "NEW_MESSAGE", socketId: client.id }).length, 1);
   });
 
-  await t.test("legacy NEW_GROUP_MESSAGE is sent as before", async () => {
-    client.emit("NEW_GROUP_MESSAGE", textMessage({ senderId: claimed, conversationId: oid() }));
+  await t.test("legacy NEW_GROUP_MESSAGE into a conversation the sender is in is sent as before", async () => {
+    const conversationId = oid();
+    server.members.set(conversationId, new Set([claimed]));
+    client.emit("NEW_GROUP_MESSAGE", textMessage({ senderId: claimed, conversationId }));
     await until(() => server.calls.group.length === 1);
   });
+
+  await t.test("legacy SETUP joins a conversation room only when the claimed user is in it", async () => {
+    const legacy = await connected(server.client(undefined));
+    const mine = oid();
+    server.members.set(mine, new Set([claimed]));
+    legacy.emit("SETUP", { userId: claimed, conversationId: mine });
+    await until(() => server.serverSocket(legacy)?.rooms.has(mine));
+
+    const other = await connected(server.client(undefined));
+    const theirs = oid();
+    server.members.set(theirs, new Set([oid()]));
+    const error = nextEvent(other, "ERROR");
+    other.emit("SETUP", { userId: claimed, conversationId: theirs });
+    const payload = await error;
+    assert.strictEqual(payload.code, "NOT_PARTICIPANT");
+    assert.strictEqual(payload.conversationId, theirs);
+    // Still set up for the claimed user's own room; just not the conversation's.
+    await until(() => server.serverSocket(other)?.rooms.has(claimed));
+    assert.ok(!server.serverSocket(other).rooms.has(theirs));
+    const setup = server.published("SETUP").find((m) => m.socketId === other.id);
+    assert.ok(!("conversationId" in setup));
+  });
+
+  for (const event of ["NEW_MESSAGE", "NEW_GROUP_MESSAGE"]) {
+    await t.test(`legacy ${event} into someone else's conversation is refused with NOT_PARTICIPANT`, async () => {
+      const legacy = await connected(server.client(undefined));
+      const theirs = oid();
+      server.members.set(theirs, new Set([oid(), oid()]));
+      const sent = server.calls.private.length + server.calls.group.length;
+      const error = nextEvent(legacy, "ERROR");
+      legacy.emit(event, textMessage({ senderId: claimed, conversationId: theirs }));
+      const payload = await error;
+      assert.strictEqual(payload.code, "NOT_PARTICIPANT");
+      assert.strictEqual(payload.event, event);
+      await settle();
+      assert.strictEqual(server.calls.private.length + server.calls.group.length, sent);
+    });
+
+    await t.test(`legacy ${event} whose senderId is not a user id is refused with INVALID_PAYLOAD`, async () => {
+      const legacy = await connected(server.client(undefined));
+      const sent = server.calls.private.length + server.calls.group.length;
+      for (const senderId of [undefined, { $ne: null }, "someone"]) {
+        const error = nextEvent(legacy, "ERROR");
+        legacy.emit(event, textMessage({ senderId, receiverId: oid(), conversationId: event === "NEW_GROUP_MESSAGE" ? oid() : undefined }));
+        const payload = await error;
+        assert.strictEqual(payload.code, "INVALID_PAYLOAD");
+        assert.strictEqual(payload.field, "senderId");
+      }
+      await settle();
+      assert.strictEqual(server.calls.private.length + server.calls.group.length, sent);
+    });
+  }
 
   await t.test("a signed-out page's SETUP (no userId) publishes nothing", async () => {
     const anonymous = await connected(server.client(undefined));
@@ -731,23 +835,23 @@ test("routePayment", async (t) => {
     ]);
   });
 
-  await t.test("permissive: an anonymous donation is broadcast trimmed, as before", () => {
+  await t.test("permissive: an anonymous donation goes to its followers' room, and is broadcast trimmed to everyone else, as before", () => {
     const data = { _id: oid(), type: "DONATE", status: "SUCCESS", referenceId, amount: 50000 };
+    const trimmed = { type: "PAYMENT", response: { type: "DONATE", referenceId, status: "SUCCESS" } };
     assert.deepStrictEqual(routePayment(data, "permissive"), [
-      {
-        broadcast: true,
-        except: [],
-        payload: { type: "PAYMENT", response: { type: "DONATE", referenceId, status: "SUCCESS" } },
-      },
+      { to: `donation:${referenceId}`, payload: trimmed },
+      { broadcast: true, except: [`donation:${referenceId}`], payload: trimmed },
     ]);
   });
 
-  await t.test("enforce: no broadcast; a signed-in donation reaches its donor, an anonymous one nobody", () => {
+  await t.test("enforce: no broadcast; a signed-in donation reaches its donor, an anonymous one only its followers' room", () => {
     const signedIn = { userId, type: "DONATE", status: "SUCCESS", referenceId };
     assert.deepStrictEqual(routePayment(signedIn, "enforce"), [
       { to: userId, payload: { type: "PAYMENT", response: signedIn } },
     ]);
-    assert.deepStrictEqual(routePayment({ type: "DONATE", status: "SUCCESS", referenceId }, "enforce"), []);
+    assert.deepStrictEqual(routePayment({ type: "DONATE", status: "SUCCESS", referenceId }, "enforce"), [
+      { to: `donation:${referenceId}`, payload: { type: "PAYMENT", response: { type: "DONATE", referenceId, status: "SUCCESS" } } },
+    ]);
   });
 
   await t.test("deliverPayment: the donor gets the full event once, others the trimmed one", async () => {
