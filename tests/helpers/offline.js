@@ -1,3 +1,4 @@
+require("./quiet-stdout"); // Node 20: stdout belongs to the test runner (quiet-stdout.js).
 /**
  * Lets a test require the REST routes from dist/ with neither Redis nor Mongo.
  *

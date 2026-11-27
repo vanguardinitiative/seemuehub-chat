@@ -1,3 +1,4 @@
+require("./helpers/quiet-stdout"); // Node 20: stdout belongs to the test runner (helpers/quiet-stdout.js).
 /**
  * The socket layer, end to end over a real socket.io server and client.
  *

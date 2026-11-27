@@ -1,3 +1,4 @@
+require("./helpers/quiet-stdout"); // Node 20: stdout belongs to the test runner (helpers/quiet-stdout.js).
 /**
  * verifyAccessToken is shared by the REST middleware and the socket handshake,
  * so these cases pin both. Runs against the compiled dist/ (see

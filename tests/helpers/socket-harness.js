@@ -1,3 +1,4 @@
+require("./quiet-stdout"); // Node 20: stdout belongs to the test runner (quiet-stdout.js).
 /**
  * A real socket.io server and clients around registerSocketHandlers, with
  * Redis and Mongo replaced through SocketDeps (the harness socket-auth.test.js
