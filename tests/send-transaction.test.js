@@ -249,12 +249,21 @@ test("serialize", async (t) => {
   });
 
   await t.test("a stuck task holds the next one only up to the wait limit", async () => {
-    const stuck = serialize("k6", () => new Promise(() => {}), 30);
-    void stuck;
-    const started = Date.now();
-    const next = await serialize("k6", async () => "went", 30);
-    assert.strictEqual(next, "went");
-    assert.ok(Date.now() - started < 1000);
+    // serialize's wait timer is unref()'d (a server never waits on it). In a
+    // test nothing else holds the event loop open while it runs, and Node
+    // 20's runner (the version CI and the Dockerfile use) then sees an empty
+    // loop and cancels the test - and every test after it in this file.
+    const keepAlive = setTimeout(() => {}, 5000);
+    try {
+      const stuck = serialize("k6", () => new Promise(() => {}), 30);
+      void stuck;
+      const started = Date.now();
+      const next = await serialize("k6", async () => "went", 30);
+      assert.strictEqual(next, "went");
+      assert.ok(Date.now() - started < 1000);
+    } finally {
+      clearTimeout(keepAlive);
+    }
   });
 });
 
