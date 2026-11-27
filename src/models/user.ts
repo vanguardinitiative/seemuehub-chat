@@ -32,6 +32,20 @@ export interface IUser extends Document {
     district?: string;
     province?: string;
   };
+  /**
+   * INDIVIDUAL or AGENCY, owned by the backend; unset reads INDIVIDUAL
+   * (utils/participant-public.ts). Read-only here.
+   */
+  providerType?: "INDIVIDUAL" | "AGENCY";
+  /** An agency's public facts, copied by the backend from its Organization. Read-only here. */
+  agencyProfile?: {
+    verified?: boolean;
+    organizationType?: string | null;
+    organizationTypeOther?: string | null;
+    website?: string | null;
+    officeAddress?: string | null;
+    slug?: string | null;
+  };
   // Chat-specific fields
   deviceToken?: string;
   isOnline?: boolean;
@@ -99,6 +113,25 @@ const UserSchema: Schema = new Schema(
       village: { type: String, default: null },
       district: { type: String, default: null },
       province: { type: String, default: null },
+    },
+    // The backend's provider fields, as its User model declares them (no
+    // defaults: this service never writes them, and a default would make a
+    // populate report one the database does not hold). Declared so a
+    // populate of these paths keeps them on hydrated documents.
+    providerType: { type: String, enum: ["INDIVIDUAL", "AGENCY"] },
+    agencyProfile: {
+      type: new Schema(
+        {
+          verified: Boolean,
+          organizationType: String,
+          organizationTypeOther: String,
+          website: String,
+          officeAddress: String,
+          slug: String,
+        },
+        { _id: false }
+      ),
+      default: undefined,
     },
     // Chat-specific fields
     deviceToken: {

@@ -11,6 +11,7 @@ import { isReadFor, type ReadStateConversation } from "@/utils/read-state";
 import { deliverPage } from "@/services/delivered";
 import { blocksAround, isPairBlocked } from "@/services/user-blocks";
 import { isObjectIdString } from "@/utils/ids";
+import { PARTICIPANT_FIELDS, PARTICIPANT_FIELDS_ONLINE, withPublicParticipants } from "@/utils/participant-public";
 import {
   CHAT_USER_BLOCKED,
   CHAT_USER_BLOCKED_MESSAGE,
@@ -90,7 +91,7 @@ const createPrivateConversation = async (req: Request, res: Response): Promise<v
           $all: [{ $elemMatch: { user: senderId } }, { $elemMatch: { user: receiverId } }],
         },
       })
-      .populate("participants.user", "userName displayName isFreelancer phone email role profileImage");
+      .populate("participants.user", PARTICIPANT_FIELDS);
 
     console.log("existingConversation===>", existingConversation);
 
@@ -154,7 +155,7 @@ const createPrivateConversation = async (req: Request, res: Response): Promise<v
     res.status(201).json({
       code: messages.CREATE_SUCCESSFUL.code,
       message: messages.CREATE_SUCCESSFUL.message,
-      data: existingConversation,
+      data: withPublicParticipants(existingConversation),
     });
     return;
   } catch (error) {
@@ -174,14 +175,14 @@ const createGroupConversation = async (req: Request, res: Response): Promise<voi
           $all: [{ $elemMatch: { user: senderId } }],
         },
       })
-      .populate("participants.user", "userName displayName isFreelancer phone email role profileImage");
+      .populate("participants.user", PARTICIPANT_FIELDS);
     console.log("step 2");
 
     if (existingConversation) {
       res.status(200).json({
         code: messages.SUCCESSFULLY.code,
         message: messages.SUCCESSFULLY.message,
-        data: existingConversation,
+        data: withPublicParticipants(existingConversation),
       });
       return;
     }
@@ -221,12 +222,12 @@ const createGroupConversation = async (req: Request, res: Response): Promise<voi
       .findOne({
         _id: newConversation._id,
       })
-      .populate("participants.user", "userName displayName isFreelancer phone email role profileImage isOnline");
+      .populate("participants.user", PARTICIPANT_FIELDS_ONLINE);
 
     res.status(201).json({
       code: messages.CREATE_SUCCESSFUL.code,
       message: messages.CREATE_SUCCESSFUL.message,
-      data: fullConversation,
+      data: withPublicParticipants(fullConversation),
     });
     return;
   } catch (error) {
@@ -262,7 +263,7 @@ const getConversation = async (req: Request, res: Response): Promise<void> => {
         _id: id,
         ...participantOf(userId),
       })
-      .populate("participants.user", "userName displayName isFreelancer phone email role profileImage");
+      .populate("participants.user", PARTICIPANT_FIELDS);
     if (!conversation) {
       // 404 rather than 403, and deliberately the same 404 a missing
       // conversation gets. A 403 would confirm the id is real, which is exactly
@@ -276,8 +277,10 @@ const getConversation = async (req: Request, res: Response): Promise<void> => {
     // What res.json would have sent (toJSON), plus latestMessageData.isRead
     // for the caller (CHAT-CONTRACT.md §1.4). The legacy MessageStatus row is
     // only looked up when lastReadAt does not already settle it.
-    const data: any =
-      typeof (conversation as any).toJSON === "function" ? (conversation as any).toJSON() : { ...(conversation as any) };
+    // Each participant with providerType and the public agency block (participant-public.ts).
+    const data: any = withPublicParticipants(
+      typeof (conversation as any).toJSON === "function" ? (conversation as any).toJSON() : { ...(conversation as any) }
+    );
     if (data.latestMessageData) {
       const messageId = data.latestMessageData.messageId;
       let isRead = isReadFor(data, userId);
@@ -387,7 +390,7 @@ const getAllConversions = async (req: Request, res: Response): Promise<void> => 
 
     const conversations = await conversationModel
       .find(query)
-      .populate("participants.user", "userName phone email role profileImage isOnline isFreelancer displayName")
+      .populate("participants.user", PARTICIPANT_FIELDS_ONLINE)
       .sort({ updatedAt: -1 })
       .lean<IConversationData[]>();
 
@@ -418,7 +421,7 @@ const getAllConversions = async (req: Request, res: Response): Promise<void> => 
           isRead: isReadFor(conversation, userId, messageId ? statusMap.get(messageId.toString()) : undefined),
         };
       }
-      return conversation;
+      return withPublicParticipants(conversation);
     });
 
     conversationData.sort((a, b) => {

@@ -4,6 +4,7 @@ import { Types } from "mongoose";
 import { messages } from "@/config";
 import { conversationModel } from "@/models/conversation";
 import { userModel } from "@/models/user";
+import { ADMIN_PARTICIPANT_FIELDS, withPublicParticipants } from "@/utils/participant-public";
 
 /**
  * Oversight listing: every conversation on the platform.
@@ -45,7 +46,7 @@ const getAllConversationsAdmin = async (req: Request, res: Response): Promise<vo
     const [conversations, total] = await Promise.all([
       conversationModel
         .find(query)
-        .populate("participants.user", "userName displayName email profileImage isFreelancer")
+        .populate("participants.user", ADMIN_PARTICIPANT_FIELDS)
         .sort({ updatedAt: -1 })
         .skip(skipNumber)
         .limit(limitNumber)
@@ -57,7 +58,8 @@ const getAllConversationsAdmin = async (req: Request, res: Response): Promise<vo
       code: messages.SUCCESSFULLY.code,
       message: messages.SUCCESSFULLY.message,
       data: {
-        conversations,
+        // Each participant with providerType and the public agency block.
+        conversations: conversations.map((conversation) => withPublicParticipants(conversation)),
         pagination: {
           skip: skipNumber,
           limit: limitNumber,
