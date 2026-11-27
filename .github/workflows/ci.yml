@@ -1,0 +1,36 @@
+name: CI
+
+# Every pull request into dev: build and test, the same `npm test` the repo
+# uses locally (tsc && tsc-alias, then node --test tests/). A merge to dev
+# deploys straight to production (deploy.yml), so this is the only place a
+# broken change shows up before it ships.
+#
+# Node 20, the version the Dockerfile builds and runs on. `npm install`, not
+# `npm ci`: no lockfile is committed (see .gitignore). The tests need neither
+# Mongo nor Redis (tests/helpers/offline.js), and no secrets.
+on:
+  pull_request:
+    branches: [dev]
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Build and test
+        run: npm test
