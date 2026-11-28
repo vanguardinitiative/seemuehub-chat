@@ -1,3 +1,4 @@
+require("./helpers/quiet-stdout"); // Node 20: stdout belongs to the test runner (helpers/quiet-stdout.js).
 /**
  * The socket layer, end to end over a real socket.io server and client.
  *
@@ -44,7 +45,9 @@ console.log = (...args) => {
 const logged = (msg, match = {}) =>
   logs.filter((line) => line.msg === msg && Object.entries(match).every(([k, v]) => line[k] === v));
 
-const until = async (predicate, ms = 1000) => {
+// It polls, so a passing test returns as soon as the predicate holds; the limit only
+// matters under load (all files run in parallel), where 1s once ran out (Node 20).
+const until = async (predicate, ms = 5000) => {
   const start = Date.now();
   while (!predicate()) {
     if (Date.now() - start > ms) throw new Error("timed out waiting");
